@@ -1,4 +1,6 @@
 BUILD = build
+ISO_ROOT = $(BUILD)/iso-root
+ISO_IMG = $(ISO_ROOT)/boot.img
 
 AS = nasm
 CPPFLAGS = -Isrc
@@ -66,6 +68,15 @@ kernel.bin: entry.o kernel.o console.o keyboard.o shell.o command.o boot/linker.
 os.bin: boot.bin kernel.bin
 	cat $(BUILD)/boot.bin $(BUILD)/kernel.bin > $(BUILD)/os.bin
 
+$(ISO_ROOT): | $(BUILD)
+	mkdir -p $@
+
+$(ISO_IMG): os.img | $(ISO_ROOT)
+	cp $(BUILD)/os.img $@
+
+os.iso: $(ISO_IMG)
+	xorriso -as mkisofs -o $(BUILD)/os.iso -b boot.img -c boot.catalog $(ISO_ROOT)
+
 os.img: boot.bin kernel.bin
 	dd if=/dev/zero of=$(BUILD)/os.img bs=512 count=2880
 	dd if=$(BUILD)/boot.bin of=$(BUILD)/os.img conv=notrunc
@@ -73,6 +84,9 @@ os.img: boot.bin kernel.bin
 
 run: os.img
 	qemu-system-x86_64 $(QEMU_ACCEL) -drive format=raw,file=$(BUILD)/os.img -display sdl
+
+run-iso: os.iso
+	qemu-system-x86_64 $(QEMU_ACCEL) -boot order=d -cdrom $(BUILD)/os.iso -display sdl
 
 clean:
 	rm -rf $(BUILD)

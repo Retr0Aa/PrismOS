@@ -1,24 +1,38 @@
 BUILD = build
 
-CROSS_COMPILE ?=
-CC ?= $(CROSS_COMPILE)gcc
-LD ?= $(CROSS_COMPILE)ld
 AS = nasm
 CPPFLAGS = -Isrc
 
-HOST_ARCH = $(shell uname -m)
-HOST_OS = $(shell uname -s)
+HOST_ARCH := $(shell uname -m)
+HOST_OS := $(shell uname -s)
 
+# Toolchain and QEMU accel selection by host OS/arch
 ifeq ($(HOST_OS),Darwin)
-QEMU_ACCEL = -accel hvf
+	CC = x86_64-elf-gcc
+	LD = x86_64-elf-ld
+	QEMU_ACCEL = -accel tcg,thread=multi
 else ifeq ($(HOST_OS),Linux)
-QEMU_ACCEL = -accel kvm
+	ifeq ($(HOST_ARCH),x86_64)
+		CC = gcc
+		LD = ld
+		QEMU_ACCEL = -accel kvm
+	else
+		CC = x86_64-elf-gcc
+		LD = x86_64-elf-ld
+		QEMU_ACCEL = -accel tcg,thread=multi
+	endif
 else
-QEMU_ACCEL = -accel tcg,thread=multi
+	CC = x86_64-elf-gcc
+	LD = x86_64-elf-ld
+	QEMU_ACCEL = -accel tcg,thread=multi
 endif
 
-CFLAGS = -m32 -ffreestanding -O0 -fno-pic -fno-pie -fno-stack-protector -c
+CFLAGS = -m32 -ffreestanding -O0 -c
 LDFLAGS = -m elf_i386 -T boot/linker.ld --oformat binary
+
+ifeq ($(HOST_OS),Linux)
+	CFLAGS += -fno-pic -fno-pie -fno-stack-protector
+endif
 
 all: os.bin
 

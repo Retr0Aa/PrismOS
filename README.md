@@ -3,12 +3,27 @@ PrismOS is hobby operating system.
 
 ## Build And Run
 
-The project supports two boot paths:
+PrismOS uses GRUB with Multiboot 1 protocol for modern, standards-compliant boot:
 
-- `make run` builds the raw floppy-style image at `build/os.img` and boots it in QEMU.
-- `make run-iso` builds a BIOS-bootable El Torito ISO at `build/os.iso` and boots the ISO in QEMU.
+- `make os.iso` builds a BIOS-bootable ISO at `build/os.iso` with GRUB bootloader
+- `make run` boots the ISO in QEMU with graphical display
+- `make clean` removes all build artifacts
 
-The ISO path requires `xorriso`, which is commonly available on Linux distributions.
+The build system requires:
+- `nasm` - assembler for boot code
+- `gcc` (or `x86_64-elf-gcc` for cross-compilation) - C compiler
+- `grub-mkrescue` - creates bootable ISO with GRUB bootloader
+- `qemu-system-i386` - for testing in QEMU
+
+### Boot in QEMU
+
+```bash
+make run          # Build and boot in QEMU with display
+```
+
+### Boot in VMware
+
+Mount `build/os.iso` in a BIOS-mode VM and boot. GRUB menu will appear with PrismOS entry.
 
 ## Adding Commands
 

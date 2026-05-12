@@ -68,7 +68,7 @@ os.iso: kernel.elf boot/grub.cfg
 	@mkdir -p $(BUILD)/iso-root/boot/grub
 	cp $(BUILD)/kernel.elf $(BUILD)/iso-root/boot/
 	cp boot/grub.cfg $(BUILD)/iso-root/boot/grub/
-	grub-mkrescue -o $(BUILD)/os.iso $(BUILD)/iso-root
+	cd $(BUILD)/iso-root && grub-mkrescue -o ../../$(BUILD)/os.iso .
 
 run: os.iso
 	qemu-system-i386 $(QEMU_ACCEL) -drive file=$(BUILD)/os.iso,index=0,media=cdrom -m 256 -display sdl

@@ -1,19 +1,23 @@
 BUILD = build
 
-CC = x86_64-elf-gcc
-LD = x86_64-elf-ld
+CROSS_COMPILE ?=
+CC ?= $(CROSS_COMPILE)gcc
+LD ?= $(CROSS_COMPILE)ld
 AS = nasm
 CPPFLAGS = -Isrc
 
 HOST_ARCH = $(shell uname -m)
+HOST_OS = $(shell uname -s)
 
-ifeq ($(HOST_ARCH),x86_64)
+ifeq ($(HOST_OS),Darwin)
 QEMU_ACCEL = -accel hvf
+else ifeq ($(HOST_OS),Linux)
+QEMU_ACCEL = -accel kvm
 else
 QEMU_ACCEL = -accel tcg,thread=multi
 endif
 
-CFLAGS = -m32 -ffreestanding -O0 -c
+CFLAGS = -m32 -ffreestanding -O0 -fno-pic -fno-pie -fno-stack-protector -c
 LDFLAGS = -m elf_i386 -T boot/linker.ld --oformat binary
 
 all: os.bin

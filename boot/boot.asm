@@ -3,6 +3,35 @@
 
 mov [BOOT_DRIVE], dl
 
+; Detect total installed RAM and store it where the kernel can read it.
+; Value is stored in kilobytes at physical address 0x9000.
+mov dword [0x9000], 0
+
+mov ax, 0xE801
+int 0x15
+jc .fallback_memory_query
+
+xor eax, eax
+movzx eax, ax
+movzx ecx, bx
+shl ecx, 6
+add eax, ecx
+add eax, 1024
+mov [0x9000], eax
+jmp .memory_query_done
+
+.fallback_memory_query:
+mov ax, 0x8800
+int 0x15
+jc .memory_query_done
+
+xor eax, eax
+movzx eax, ax
+add eax, 1024
+mov [0x9000], eax
+
+.memory_query_done:
+
 ; Load kernel into memory at 0x1000
 xor ax, ax
 mov es, ax

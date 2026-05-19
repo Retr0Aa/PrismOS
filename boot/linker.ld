@@ -1,18 +1,15 @@
-ENTRY(_start)
+ENTRY(start)
 
 SECTIONS
 {
-    . = 0x1000;
+    .multiboot : {
+        KEEP(*(.multiboot))
+    }
 
-    /* Multiboot header must be in first 8KB */
-    .multiboot : { *(.multiboot) }
-    
-    /* Read-only sections */
+    . = 1M;
+
     .text : { *(.text*) }
     .rodata : { *(.rodata*) }
-    
-    /* Read-write sections */
-    . = ALIGN(0x1000);
     .data : { *(.data*) }
-    .bss : { *(.bss*) }
+    .bss : { *(.bss*) *(COMMON) }
 }

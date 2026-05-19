@@ -1,4 +1,5 @@
 #include "keyboard.h"
+
 #include "platform/io.h"
 
 #define KEYBOARD_DATA_PORT 0x60
@@ -25,7 +26,6 @@ static int keyboard_data_available(void) {
 }
 
 static unsigned char keyboard_read_scancode(void) {
-    // Polling is enough for this tiny shell and keeps the kernel simple.
     while (!keyboard_data_available()) {
         cpu_relax();
     }

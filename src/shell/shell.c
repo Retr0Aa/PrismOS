@@ -78,18 +78,6 @@ static void shell_render_input(void) {
     console_set_cursor((int)string_length(SHELL_PROMPT) + shell.cursor, shell.prompt_row);
 }
 
-static void shell_show_prompt(void) {
-    shell.prompt_row = console_get_y();
-    shell.line[0] = '\0';
-    shell.length = 0;
-    shell.cursor = 0;
-    shell_reset_history_navigation();
-    console_clear_row(shell.prompt_row);
-    console_set_cursor(0, shell.prompt_row);
-    console_write(SHELL_PROMPT);
-    console_set_cursor((int)string_length(SHELL_PROMPT), shell.prompt_row);
-}
-
 static void shell_refresh_line(void) {
     shell_render_input();
 }
@@ -220,10 +208,21 @@ static void shell_history_down(void) {
     shell_refresh_line();
 }
 
+static void shell_show_prompt(void) {
+    shell.prompt_row = console_get_y();
+    shell.line[0] = '\0';
+    shell.length = 0;
+    shell.cursor = 0;
+    shell_reset_history_navigation();
+    console_clear_row(shell.prompt_row);
+    console_set_cursor(0, shell.prompt_row);
+    console_write(SHELL_PROMPT);
+    console_set_cursor((int)string_length(SHELL_PROMPT), shell.prompt_row);
+}
+
 static void shell_handle_event(KeyEvent event) {
     if (event.type == KEY_EVENT_CHARACTER) {
         if (event.character == '\t') {
-            shell_insert_char(' ');
             shell_insert_char(' ');
             shell_insert_char(' ');
             shell_insert_char(' ');

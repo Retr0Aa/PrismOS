@@ -1,10 +1,8 @@
 #include "shell/shell.h"
 
-/* extern multiboot_info globals from entry.asm */
 extern unsigned int g_multiboot_magic;
 extern unsigned int g_multiboot_info;
 
-/* Multiboot 1 info structure */
 struct multiboot_info {
     unsigned int flags;
     unsigned int mem_lower;
@@ -19,24 +17,24 @@ struct multiboot_info {
     unsigned int syms_shndx;
     unsigned int mmap_length;
     unsigned int mmap_addr;
-    /* ... rest of fields optional for now ... */
 } __attribute__((packed));
 
 void main(void) {
     unsigned int magic = g_multiboot_magic;
-    struct multiboot_info *mbi = (struct multiboot_info *)g_multiboot_info;
-    
-    /* Verify GRUB magic */
+    struct multiboot_info* mbi = (struct multiboot_info*)g_multiboot_info;
+
     if (magic != 0x2BADB002) {
-        /* Not loaded by multiboot bootloader - halt */
-        while (1);
+        while (1) {
+        }
     }
-    
+
+    (void)mbi;
+
     /* TODO: Later, parse mbi->flags and use memory info from mbi->mem_lower/mem_upper */
-    
+
     shell_run();
 }
 
 void __cxa_pure_virtual() { }
-void _exit() { while (1); }
 
+void _exit(void) { while (1); }

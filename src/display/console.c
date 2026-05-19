@@ -24,10 +24,17 @@ static inline int get_offset(int x, int y) {
     return (y * VGA_WIDTH + x) * 2;
 }
 
-// VGA uses a hardware cursor, so the visible caret needs to be synchronized explicitly.
+static void console_enable_hardware_cursor(void) {
+    outb(0x3D4, 0x0A);
+    outb(0x3D5, 0x0E);
+    outb(0x3D4, 0x0B);
+    outb(0x3D5, 0x0F);
+}
+
 static void console_update_hardware_cursor(void) {
     uint16_t position = (uint16_t)(console.y * VGA_WIDTH + console.x);
 
+    console_enable_hardware_cursor();
     outb(0x3D4, 0x0F);
     outb(0x3D5, (uint8_t)(position & 0xFF));
     outb(0x3D4, 0x0E);

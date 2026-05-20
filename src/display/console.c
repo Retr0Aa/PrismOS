@@ -1,129 +1,440 @@
 #include <stdint.h>
 
 #include "console.h"
-#include "platform/io.h"
+#include "font8x8.h"
 
-#define VGA_MEMORY ((volatile uint8_t*)0xB8000)
-#define VGA_WIDTH 80
-#define VGA_HEIGHT 25
+#define FONT_WIDTH 8U
+#define FONT_HEIGHT 8U
+#define FONT_SCALE 2U
+#define CELL_WIDTH (FONT_WIDTH * FONT_SCALE)
+#define CELL_HEIGHT (FONT_HEIGHT * FONT_SCALE)
+#define MAX_COLUMNS 160U
+#define MAX_ROWS 120U
+
+typedef struct {
+    uintptr_t address;
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint8_t bytes_per_pixel;
+    uint8_t red_position;
+    uint8_t red_mask_size;
+    uint8_t green_position;
+    uint8_t green_mask_size;
+    uint8_t blue_position;
+    uint8_t blue_mask_size;
+} FramebufferState;
 
 typedef struct {
     int x;
     int y;
     VGA_Color fg_color;
     VGA_Color bg_color;
+    int ready;
+    int cursor_visible;
+    uint32_t blink_counter;
+    FramebufferState framebuffer;
+    uint8_t cells[MAX_ROWS][MAX_COLUMNS];
+    uint8_t cell_fg[MAX_ROWS][MAX_COLUMNS];
+    uint8_t cell_bg[MAX_ROWS][MAX_COLUMNS];
 } Console;
 
-static Console console = {0, 0, COLOR_WHITE, COLOR_BLACK};
+static Console console = {0, 0, COLOR_WHITE, COLOR_BLACK, 0, 0, 0, {0}, {{0}}, {{0}}, {{0}}};
 
-static inline uint8_t make_color_attr(VGA_Color fg, VGA_Color bg) {
-    return (uint8_t)((bg << 4) | fg);
+static const uint32_t color_palette[16] = {
+    0x000000U, 0x0000AAU, 0x00AA00U, 0x00AAAAU,
+    0xAA0000U, 0xAA00AAU, 0xAA5500U, 0xAAAAAAU,
+    0x555555U, 0x5555FFU, 0x55FF55U, 0x55FFFFU,
+    0xFF5555U, 0xFF55FFU, 0xFFFF55U, 0xFFFFFFU,
+};
+
+static uint32_t scale_component(uint8_t component, uint8_t mask_size) {
+    if (mask_size == 0U) {
+        return 0U;
+    }
+
+    if (mask_size >= 8U) {
+        return (uint32_t)component;
+    }
+
+    return ((uint32_t)component * ((1U << mask_size) - 1U) + 127U) / 255U;
 }
 
-static inline int get_offset(int x, int y) {
-    return (y * VGA_WIDTH + x) * 2;
+static uint32_t framebuffer_make_pixel(VGA_Color color) {
+    const uint32_t rgb = color_palette[color & 0x0FU];
+    const uint8_t red = (uint8_t)((rgb >> 16) & 0xFFU);
+    const uint8_t green = (uint8_t)((rgb >> 8) & 0xFFU);
+    const uint8_t blue = (uint8_t)(rgb & 0xFFU);
+
+    return (scale_component(red, console.framebuffer.red_mask_size) << console.framebuffer.red_position)
+        | (scale_component(green, console.framebuffer.green_mask_size) << console.framebuffer.green_position)
+        | (scale_component(blue, console.framebuffer.blue_mask_size) << console.framebuffer.blue_position);
 }
 
-static void console_enable_hardware_cursor(void) {
-    outb(0x3D4, 0x0A);
-    outb(0x3D5, 0x0E);
-    outb(0x3D4, 0x0B);
-    outb(0x3D5, 0x0F);
+static uint8_t* framebuffer_base(void) {
+    return (uint8_t*)(uintptr_t)console.framebuffer.address;
 }
 
-static void console_update_hardware_cursor(void) {
-    uint16_t position = (uint16_t)(console.y * VGA_WIDTH + console.x);
+static int console_columns(void) {
+    if (!console.ready || console.framebuffer.width < CELL_WIDTH) {
+        return 0;
+    }
 
-    console_enable_hardware_cursor();
-    outb(0x3D4, 0x0F);
-    outb(0x3D5, (uint8_t)(position & 0xFF));
-    outb(0x3D4, 0x0E);
-    outb(0x3D5, (uint8_t)((position >> 8) & 0xFF));
+    if (console.framebuffer.width / CELL_WIDTH > MAX_COLUMNS) {
+        return (int)MAX_COLUMNS;
+    }
+
+    return (int)(console.framebuffer.width / CELL_WIDTH);
 }
 
-static void console_scroll(void) {
-    const uint8_t attribute = make_color_attr(console.fg_color, console.bg_color);
+static int console_rows(void) {
+    if (!console.ready || console.framebuffer.height < CELL_HEIGHT) {
+        return 0;
+    }
 
-    for (int y = 1; y < VGA_HEIGHT; y++) {
-        for (int x = 0; x < VGA_WIDTH; x++) {
-            const int from = get_offset(x, y);
-            const int to = get_offset(x, y - 1);
-            VGA_MEMORY[to] = VGA_MEMORY[from];
-            VGA_MEMORY[to + 1] = VGA_MEMORY[from + 1];
+    if (console.framebuffer.height / CELL_HEIGHT > MAX_ROWS) {
+        return (int)MAX_ROWS;
+    }
+
+    return (int)(console.framebuffer.height / CELL_HEIGHT);
+}
+
+static void console_draw_cell(int column, int row);
+static void framebuffer_fill_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t height, uint32_t color);
+
+static void console_draw_cursor(void) {
+    const uint32_t foreground = framebuffer_make_pixel(console.fg_color);
+    const int columns = console_columns();
+    const int rows = console_rows();
+    const uint32_t blink_period = 60U;
+    const int is_cursor_visible = (console.blink_counter / blink_period) % 2 == 0 ? 1 : 0;
+
+    if (!console.ready || !console.cursor_visible || !is_cursor_visible || columns <= 0 || rows <= 0) {
+        return;
+    }
+
+    if (console.x < 0 || console.x >= columns || console.y < 0 || console.y >= rows) {
+        return;
+    }
+
+    framebuffer_fill_rect(
+        (uint32_t)console.x * CELL_WIDTH,
+        (uint32_t)console.y * CELL_HEIGHT + (CELL_HEIGHT - 2U),
+        CELL_WIDTH,
+        2U,
+        foreground);
+}
+
+static void console_erase_cursor(void) {
+    const int columns = console_columns();
+    const int rows = console_rows();
+
+    if (!console.ready || !console.cursor_visible || columns <= 0 || rows <= 0) {
+        return;
+    }
+
+    if (console.x < 0 || console.x >= columns || console.y < 0 || console.y >= rows) {
+        return;
+    }
+
+    console_draw_cell(console.x, console.y);
+}
+
+static void framebuffer_write_pixel(uint32_t x, uint32_t y, uint32_t color) {
+    uint8_t* pixel;
+
+    if (!console.ready) {
+        return;
+    }
+
+    if (x >= console.framebuffer.width || y >= console.framebuffer.height) {
+        return;
+    }
+
+    pixel = framebuffer_base() + (y * console.framebuffer.pitch) + (x * console.framebuffer.bytes_per_pixel);
+
+    switch (console.framebuffer.bytes_per_pixel) {
+        case 4:
+            *(uint32_t*)pixel = color;
+            break;
+        case 3:
+            pixel[0] = (uint8_t)(color & 0xFFU);
+            pixel[1] = (uint8_t)((color >> 8) & 0xFFU);
+            pixel[2] = (uint8_t)((color >> 16) & 0xFFU);
+            break;
+        case 2:
+            *(uint16_t*)pixel = (uint16_t)color;
+            break;
+        case 1:
+            *pixel = (uint8_t)color;
+            break;
+        default:
+            break;
+    }
+}
+
+static void framebuffer_fill_row(uint32_t y, uint32_t color) {
+    uint32_t x;
+
+    if (!console.ready || y >= console.framebuffer.height) {
+        return;
+    }
+
+    for (x = 0; x < console.framebuffer.width; x++) {
+        framebuffer_write_pixel(x, y, color);
+    }
+}
+
+static void framebuffer_fill_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t height, uint32_t color) {
+    uint32_t row;
+    uint32_t col;
+
+    if (!console.ready) {
+        return;
+    }
+
+    for (row = 0; row < height; row++) {
+        for (col = 0; col < width; col++) {
+            framebuffer_write_pixel(x + col, y + row, color);
         }
     }
+}
 
-    for (int x = 0; x < VGA_WIDTH; x++) {
-        const int offset = get_offset(x, VGA_HEIGHT - 1);
-        VGA_MEMORY[offset] = ' ';
-        VGA_MEMORY[offset + 1] = attribute;
+static void framebuffer_copy_rows_up(uint32_t pixel_rows) {
+    uint32_t y;
+    uint8_t* base;
+
+    if (!console.ready || pixel_rows == 0U || pixel_rows >= console.framebuffer.height) {
+        return;
     }
 
-    if (console.y > 0) {
-        console.y--;
+    base = framebuffer_base();
+    for (y = pixel_rows; y < console.framebuffer.height; y++) {
+        uint8_t* destination = base + ((y - pixel_rows) * console.framebuffer.pitch);
+        uint8_t* source = base + (y * console.framebuffer.pitch);
+
+        for (uint32_t index = 0; index < console.framebuffer.pitch; index++) {
+            destination[index] = source[index];
+        }
     }
+}
+
+static void console_render_glyph(unsigned char codepoint, int column, int row, VGA_Color fg, VGA_Color bg) {
+    const uint8_t* glyph = font8x8[codepoint];
+    const uint32_t foreground = framebuffer_make_pixel(fg);
+    const uint32_t background = framebuffer_make_pixel(bg);
+    const uint32_t start_x = (uint32_t)column * CELL_WIDTH;
+    const uint32_t start_y = (uint32_t)row * CELL_HEIGHT;
+
+    for (uint32_t row = 0; row < FONT_HEIGHT; row++) {
+        const uint8_t row_bits = glyph[row];
+
+        for (uint32_t column = 0; column < FONT_WIDTH; column++) {
+            const uint32_t color = (row_bits & (1U << column)) != 0U ? foreground : background;
+            const uint32_t pixel_x = start_x + (column * FONT_SCALE);
+            const uint32_t pixel_y = start_y + (row * FONT_SCALE);
+
+            for (uint32_t scale_y = 0; scale_y < FONT_SCALE; scale_y++) {
+                for (uint32_t scale_x = 0; scale_x < FONT_SCALE; scale_x++) {
+                    framebuffer_write_pixel(pixel_x + scale_x, pixel_y + scale_y, color);
+                }
+            }
+        }
+    }
+}
+
+static void console_draw_cell(int column, int row) {
+    unsigned char codepoint;
+    VGA_Color fg;
+    VGA_Color bg;
+
+    if (!console.ready || column < 0 || row < 0 || column >= console_columns() || row >= console_rows()) {
+        return;
+    }
+
+    codepoint = console.cells[row][column];
+    fg = (VGA_Color)console.cell_fg[row][column];
+    bg = (VGA_Color)console.cell_bg[row][column];
+    console_render_glyph(codepoint, column, row, fg, bg);
+}
+
+static void console_write_cell(int column, int row, unsigned char codepoint, VGA_Color fg, VGA_Color bg) {
+    if (!console.ready || column < 0 || row < 0 || column >= console_columns() || row >= console_rows()) {
+        return;
+    }
+
+    console.cells[row][column] = codepoint;
+    console.cell_fg[row][column] = (uint8_t)fg;
+    console.cell_bg[row][column] = (uint8_t)bg;
+    console_render_glyph(codepoint, column, row, fg, bg);
 }
 
 static void console_newline(void) {
+    const int rows = console_rows();
+
+    console_erase_cursor();
     console.x = 0;
     console.y++;
-    if (console.y >= VGA_HEIGHT) {
-        console_scroll();
-        console.y = VGA_HEIGHT - 1;
+
+    if (rows <= 0) {
+        return;
     }
+
+    if (console.y >= rows) {
+        framebuffer_copy_rows_up(CELL_HEIGHT);
+        for (uint32_t row = (uint32_t)console.framebuffer.height - CELL_HEIGHT; row < console.framebuffer.height; row++) {
+            framebuffer_fill_row(row, framebuffer_make_pixel(console.bg_color));
+        }
+
+        for (int row = 1; row < rows; row++) {
+            for (int column = 0; column < console_columns(); column++) {
+                console.cells[row - 1][column] = console.cells[row][column];
+                console.cell_fg[row - 1][column] = console.cell_fg[row][column];
+                console.cell_bg[row - 1][column] = console.cell_bg[row][column];
+            }
+        }
+
+        for (int column = 0; column < console_columns(); column++) {
+            console.cells[rows - 1][column] = ' ';
+            console.cell_fg[rows - 1][column] = (uint8_t)console.fg_color;
+            console.cell_bg[rows - 1][column] = (uint8_t)console.bg_color;
+        }
+
+        console.y = rows - 1;
+    }
+
+    console_draw_cursor();
+}
+
+void console_init(const FramebufferInfo* framebuffer) {
+    if (framebuffer == 0 || framebuffer->address == 0U || framebuffer->width < FONT_WIDTH || framebuffer->height < FONT_HEIGHT || framebuffer->bytes_per_pixel == 0U) {
+        console.ready = 0;
+        return;
+    }
+
+    console.framebuffer.address = (uintptr_t)framebuffer->address;
+    console.framebuffer.width = framebuffer->width;
+    console.framebuffer.height = framebuffer->height;
+    console.framebuffer.pitch = framebuffer->pitch;
+    console.framebuffer.bytes_per_pixel = framebuffer->bytes_per_pixel;
+    console.framebuffer.red_position = framebuffer->red_position;
+    console.framebuffer.red_mask_size = framebuffer->red_mask_size;
+    console.framebuffer.green_position = framebuffer->green_position;
+    console.framebuffer.green_mask_size = framebuffer->green_mask_size;
+    console.framebuffer.blue_position = framebuffer->blue_position;
+    console.framebuffer.blue_mask_size = framebuffer->blue_mask_size;
+    console.fg_color = COLOR_WHITE;
+    console.bg_color = COLOR_BLACK;
+    console.x = 0;
+    console.y = 0;
+    console.cursor_visible = 1;
+    console.ready = 1;
+
+    for (uint32_t row = 0; row < MAX_ROWS; row++) {
+        for (uint32_t column = 0; column < MAX_COLUMNS; column++) {
+            console.cells[row][column] = ' ';
+            console.cell_fg[row][column] = (uint8_t)console.fg_color;
+            console.cell_bg[row][column] = (uint8_t)console.bg_color;
+        }
+    }
+
+    console_clear();
 }
 
 void console_clear_row(int row) {
-    const uint8_t attribute = make_color_attr(console.fg_color, console.bg_color);
+    const uint32_t background = framebuffer_make_pixel(console.bg_color);
+    const int columns = console_columns();
 
-    if (row < 0 || row >= VGA_HEIGHT) {
+    if (!console.ready || row < 0 || row >= console_rows()) {
         return;
     }
 
-    for (int x = 0; x < VGA_WIDTH; x++) {
-        const int offset = get_offset(x, row);
-        VGA_MEMORY[offset] = ' ';
-        VGA_MEMORY[offset + 1] = attribute;
+    console_erase_cursor();
+
+    for (int column = 0; column < columns; column++) {
+        console.cells[row][column] = ' ';
+        console.cell_fg[row][column] = (uint8_t)console.fg_color;
+        console.cell_bg[row][column] = (uint8_t)console.bg_color;
     }
+
+    framebuffer_fill_rect(0U, (uint32_t)row * CELL_HEIGHT, console.framebuffer.width, CELL_HEIGHT, background);
+    console_draw_cursor();
 }
 
 void console_clear(void) {
-    for (int y = 0; y < VGA_HEIGHT; y++) {
-        console_clear_row(y);
+    const int columns = console_columns();
+    const int rows = console_rows();
+
+    if (console.ready) {
+        framebuffer_fill_rect(0U, 0U, console.framebuffer.width, console.framebuffer.height, framebuffer_make_pixel(console.bg_color));
     }
 
+    console.cursor_visible = 1;
     console.x = 0;
     console.y = 0;
-    console_update_hardware_cursor();
+
+    for (int row = 0; row < rows; row++) {
+        for (int column = 0; column < columns; column++) {
+            console.cells[row][column] = ' ';
+            console.cell_fg[row][column] = (uint8_t)console.fg_color;
+            console.cell_bg[row][column] = (uint8_t)console.bg_color;
+        }
+    }
+
+    console_draw_cursor();
 }
 
 void console_write_char(char c) {
-    const uint8_t attribute = make_color_attr(console.fg_color, console.bg_color);
+    const int columns = console_columns();
+    const int rows = console_rows();
+    unsigned char codepoint;
 
-    if (c == '\n') {
-        console_newline();
-        console_update_hardware_cursor();
+    if (!console.ready || columns <= 0 || rows <= 0) {
         return;
     }
 
-    if (console.x >= VGA_WIDTH) {
+    if (c == '\n') {
+        console_newline();
+        return;
+    }
+
+    if (c == '\r') {
+        return;
+    }
+
+    if (c == '\t') {
+        console_write_char(' ');
+        console_write_char(' ');
+        console_write_char(' ');
+        console_write_char(' ');
+        return;
+    }
+
+    if (console.x >= columns) {
         console_newline();
     }
 
-    const int offset = get_offset(console.x, console.y);
-    VGA_MEMORY[offset] = (uint8_t)c;
-    VGA_MEMORY[offset + 1] = attribute;
+    console_erase_cursor();
 
+    codepoint = (unsigned char)c;
+
+    if (codepoint < 32U || codepoint > 127U) {
+        codepoint = '?';
+    }
+
+    console_write_cell(console.x, console.y, codepoint, console.fg_color, console.bg_color);
     console.x++;
-    if (console.x >= VGA_WIDTH) {
+
+    if (console.x >= columns) {
         console_newline();
+        return;
     }
 
-    console_update_hardware_cursor();
+    console_draw_cursor();
 }
 
 void console_write(const char* str) {
-    while (*str) {
+    while (*str != '\0') {
         console_write_char(*str++);
     }
 }
@@ -137,14 +448,14 @@ void console_write_uint(unsigned int value) {
     char buffer[11];
     int index = 0;
 
-    if (value == 0) {
+    if (value == 0U) {
         console_write_char('0');
         return;
     }
 
-    while (value > 0 && index < 10) {
-        buffer[index++] = (char)('0' + (value % 10));
-        value /= 10;
+    while (value > 0U && index < 10) {
+        buffer[index++] = (char)('0' + (value % 10U));
+        value /= 10U;
     }
 
     while (index > 0) {
@@ -166,10 +477,30 @@ void console_set_color(VGA_Color fg, VGA_Color bg) {
 }
 
 void console_set_cursor(int x, int y) {
-    if (x >= 0 && x < VGA_WIDTH && y >= 0 && y < VGA_HEIGHT) {
+    const int columns = console_columns();
+    const int rows = console_rows();
+
+    if (x >= 0 && x < columns && y >= 0 && y < rows) {
+        console_erase_cursor();
         console.x = x;
         console.y = y;
-        console_update_hardware_cursor();
+        console_draw_cursor();
+    }
+}
+
+void console_tick(void) {
+    if (console.ready) {
+        console.blink_counter++;
+        
+        // Reset counter to prevent overflow and keep blinking stable
+        // One full cycle is 2 * blink_period
+        if (console.blink_counter >= 120U) {
+            console.blink_counter = 0;
+        }
+        
+        // Redraw cursor at new blink state
+        console_erase_cursor();
+        console_draw_cursor();
     }
 }
 

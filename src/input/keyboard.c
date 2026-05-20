@@ -1,5 +1,6 @@
 #include "keyboard.h"
 
+#include "display/console.h"
 #include "platform/io.h"
 
 #define KEYBOARD_DATA_PORT 0x60
@@ -26,9 +27,18 @@ static int keyboard_data_available(void) {
 }
 
 static unsigned char keyboard_read_scancode(void) {
+    static unsigned int poll_counter = 0;
     while (!keyboard_data_available()) {
+        /* Rate-limit console_tick to avoid extremely fast blinking when polling.
+         * Use a much larger interval so blinking isn't driven by tight polling loops.
+         */
+        poll_counter++;
+        if ((poll_counter & 0x3FFF) == 0) { /* every 16384 iterations */
+            console_tick();
+        }
         cpu_relax();
     }
+    poll_counter = 0;
 
     return inb(KEYBOARD_DATA_PORT);
 }

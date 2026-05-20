@@ -1,42 +1,31 @@
 # PrismOS
-PrismOS is hobby operating system.
 
-## Build And Run
+PrismOS is a small hobby operating system that boots via GRUB and runs on x86 hardware (or in QEMU). It provides a simple framebuffer console, a basic shell, and a handful of built-in commands.
 
-PrismOS uses GRUB with Multiboot 1 protocol for modern, standards-compliant boot:
+## Quick build & run
 
-- `make os.iso` builds a BIOS-bootable ISO at `build/os.iso` with GRUB bootloader
-- `make run` boots the ISO in QEMU with graphical display
-- `make clean` removes all build artifacts
+Install the build dependencies (example for Debian/Ubuntu):
 
-The build system requires:
-- `nasm` - assembler for boot code
-- `gcc` (or `x86_64-elf-gcc` for cross-compilation) - C compiler
-- `grub-mkrescue` - creates bootable ISO with GRUB bootloader
-- `qemu-system-i386` - for testing in QEMU
-
-### Boot in QEMU
-
-```bash
-make run          # Build and boot in QEMU with display
+```shell
+sudo apt-get install build-essential nasm gcc-multilib xorriso qemu-system-x86
 ```
 
-### Boot in VMware
+Build and run:
 
-Mount `build/os.iso` in a BIOS-mode VM and boot. GRUB menu will appear with PrismOS entry.
+```shell
+make run           # build (if needed) and boot the ISO in QEMU
+```
 
-## Adding Commands
+Other useful targets:
 
-PrismOS uses a command registry in [src/command.c](src/command.c) as the single source of truth for built-in shell commands. Each command is represented by one entry in the `commands` array with three pieces of data:
+```shell
+make clean         # remove build artifacts
+```
 
-- `name`: the command typed in the shell
-- `description`: the text shown by `help`
-- `handler`: the function that runs when the command is executed
+Notes:
+- The build uses 32-bit compilation flags (gcc -m32). Ensure you have multilib support installed.
+- `make run` launches QEMU for quick testing; you can also boot `build/os.iso` in a BIOS-mode VM.
 
-To add a new command:
+If you want a reproducible cross-toolchain build, replace the host `gcc` invocations with an i686-elf cross-compiler and adjust the Makefile accordingly.
 
-1. Add a new handler function in [src/command.c](src/command.c).
-2. Add one new entry to the `commands` array with the command name, description, and handler.
-3. Rebuild PrismOS.
-
-The `help` command automatically lists every command from the registry, so no separate help text needs to be updated.
+For development, edit sources under `src/`, then re-run `make kernel.elf` (or `make run`).

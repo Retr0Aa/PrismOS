@@ -1,13 +1,10 @@
 #include <stdint.h>
 
 #include "console.h"
-#include "font8x8.h"
+#include "psf_font.h"
 
 #define FONT_WIDTH 8U
-#define FONT_HEIGHT 8U
-#define FONT_SCALE 2U
-#define CELL_WIDTH (FONT_WIDTH * FONT_SCALE)
-#define CELL_HEIGHT (FONT_HEIGHT * FONT_SCALE)
+#define FONT_HEIGHT 16U
 #define MAX_COLUMNS 160U
 #define MAX_ROWS 120U
 
@@ -75,28 +72,59 @@ static uint8_t* framebuffer_base(void) {
     return (uint8_t*)(uintptr_t)console.framebuffer.address;
 }
 
+static uint32_t console_source_font_width(void) {
+    return psf_font_get_width();
+}
+
+static uint32_t console_source_font_height(void) {
+    return psf_font_get_height();
+}
+
+static uint32_t console_cell_width(void) {
+    return FONT_WIDTH;
+}
+
+static uint32_t console_cell_height(void) {
+    return FONT_HEIGHT;
+}
+
+static uint32_t console_cursor_thickness(void) {
+    const uint32_t cell_height = console_cell_height();
+    uint32_t thickness = cell_height / 8U;
+
+    if (thickness == 0U) {
+        thickness = 1U;
+    }
+
+    return thickness;
+}
+
 static int console_columns(void) {
-    if (!console.ready || console.framebuffer.width < CELL_WIDTH) {
+    const uint32_t cell_width = console_cell_width();
+
+    if (!console.ready || cell_width == 0U || console.framebuffer.width < cell_width) {
         return 0;
     }
 
-    if (console.framebuffer.width / CELL_WIDTH > MAX_COLUMNS) {
+    if (console.framebuffer.width / cell_width > MAX_COLUMNS) {
         return (int)MAX_COLUMNS;
     }
 
-    return (int)(console.framebuffer.width / CELL_WIDTH);
+    return (int)(console.framebuffer.width / cell_width);
 }
 
 static int console_rows(void) {
-    if (!console.ready || console.framebuffer.height < CELL_HEIGHT) {
+    const uint32_t cell_height = console_cell_height();
+
+    if (!console.ready || cell_height == 0U || console.framebuffer.height < cell_height) {
         return 0;
     }
 
-    if (console.framebuffer.height / CELL_HEIGHT > MAX_ROWS) {
+    if (console.framebuffer.height / cell_height > MAX_ROWS) {
         return (int)MAX_ROWS;
     }
 
-    return (int)(console.framebuffer.height / CELL_HEIGHT);
+    return (int)(console.framebuffer.height / cell_height);
 }
 
 static void console_draw_cell(int column, int row);
@@ -118,10 +146,10 @@ static void console_draw_cursor(void) {
     }
 
     framebuffer_fill_rect(
-        (uint32_t)console.x * CELL_WIDTH,
-        (uint32_t)console.y * CELL_HEIGHT + (CELL_HEIGHT - 2U),
-        CELL_WIDTH,
-        2U,
+        (uint32_t)console.x * console_cell_width(),
+        (uint32_t)console.y * console_cell_height() + (console_cell_height() - console_cursor_thickness()),
+        console_cell_width(),
+        console_cursor_thickness(),
         foreground);
 }
 
@@ -220,25 +248,31 @@ static void framebuffer_copy_rows_up(uint32_t pixel_rows) {
 }
 
 static void console_render_glyph(unsigned char codepoint, int column, int row, VGA_Color fg, VGA_Color bg) {
-    const uint8_t* glyph = font8x8[codepoint];
+    const uint8_t* glyph = psf_font_get_glyph(codepoint);
+    const uint32_t cell_width = console_cell_width();
+    const uint32_t cell_height = console_cell_height();
+    const uint32_t font_width = console_source_font_width();
+    const uint32_t font_height = console_source_font_height();
     const uint32_t foreground = framebuffer_make_pixel(fg);
     const uint32_t background = framebuffer_make_pixel(bg);
-    const uint32_t start_x = (uint32_t)column * CELL_WIDTH;
-    const uint32_t start_y = (uint32_t)row * CELL_HEIGHT;
+    const uint32_t start_x = (uint32_t)column * cell_width;
+    const uint32_t start_y = (uint32_t)row * cell_height;
 
-    for (uint32_t row = 0; row < FONT_HEIGHT; row++) {
-        const uint8_t row_bits = glyph[row];
+    if (glyph == 0 || font_width == 0U || font_height == 0U || cell_width == 0U || cell_height == 0U) {
+        return;
+    }
 
-        for (uint32_t column = 0; column < FONT_WIDTH; column++) {
-            const uint32_t color = (row_bits & (1U << column)) != 0U ? foreground : background;
-            const uint32_t pixel_x = start_x + (column * FONT_SCALE);
-            const uint32_t pixel_y = start_y + (row * FONT_SCALE);
+    for (uint32_t pixel_row = 0; pixel_row < cell_height; pixel_row++) {
+        const uint32_t glyph_row = (pixel_row * font_height) / cell_height;
+        const uint8_t row_bits = glyph[glyph_row];
 
-            for (uint32_t scale_y = 0; scale_y < FONT_SCALE; scale_y++) {
-                for (uint32_t scale_x = 0; scale_x < FONT_SCALE; scale_x++) {
-                    framebuffer_write_pixel(pixel_x + scale_x, pixel_y + scale_y, color);
-                }
-            }
+        for (uint32_t pixel_column = 0; pixel_column < cell_width; pixel_column++) {
+            const uint32_t glyph_column = (pixel_column * font_width) / cell_width;
+            const uint32_t color = (row_bits & (1U << glyph_column)) != 0U ? foreground : background;
+            const uint32_t pixel_x = start_x + pixel_column;
+            const uint32_t pixel_y = start_y + pixel_row;
+
+            framebuffer_write_pixel(pixel_x, pixel_y, color);
         }
     }
 }
@@ -271,6 +305,7 @@ static void console_write_cell(int column, int row, unsigned char codepoint, VGA
 
 static void console_newline(void) {
     const int rows = console_rows();
+    const uint32_t cell_height = console_cell_height();
 
     console_erase_cursor();
     console.x = 0;
@@ -281,8 +316,8 @@ static void console_newline(void) {
     }
 
     if (console.y >= rows) {
-        framebuffer_copy_rows_up(CELL_HEIGHT);
-        for (uint32_t row = (uint32_t)console.framebuffer.height - CELL_HEIGHT; row < console.framebuffer.height; row++) {
+        framebuffer_copy_rows_up(cell_height);
+        for (uint32_t row = (uint32_t)console.framebuffer.height - cell_height; row < console.framebuffer.height; row++) {
             framebuffer_fill_row(row, framebuffer_make_pixel(console.bg_color));
         }
 
@@ -307,7 +342,13 @@ static void console_newline(void) {
 }
 
 void console_init(const FramebufferInfo* framebuffer) {
-    if (framebuffer == 0 || framebuffer->address == 0U || framebuffer->width < FONT_WIDTH || framebuffer->height < FONT_HEIGHT || framebuffer->bytes_per_pixel == 0U) {
+    if (framebuffer == 0
+        || framebuffer->address == 0U
+        || console_source_font_width() == 0U
+        || console_source_font_height() == 0U
+        || framebuffer->width < FONT_WIDTH
+        || framebuffer->height < FONT_HEIGHT
+        || framebuffer->bytes_per_pixel == 0U) {
         console.ready = 0;
         return;
     }
@@ -344,6 +385,7 @@ void console_init(const FramebufferInfo* framebuffer) {
 void console_clear_row(int row) {
     const uint32_t background = framebuffer_make_pixel(console.bg_color);
     const int columns = console_columns();
+    const uint32_t cell_height = console_cell_height();
 
     if (!console.ready || row < 0 || row >= console_rows()) {
         return;
@@ -357,7 +399,7 @@ void console_clear_row(int row) {
         console.cell_bg[row][column] = (uint8_t)console.bg_color;
     }
 
-    framebuffer_fill_rect(0U, (uint32_t)row * CELL_HEIGHT, console.framebuffer.width, CELL_HEIGHT, background);
+    framebuffer_fill_rect(0U, (uint32_t)row * cell_height, console.framebuffer.width, cell_height, background);
     console_draw_cursor();
 }
 
@@ -510,4 +552,12 @@ int console_get_x(void) {
 
 int console_get_y(void) {
     return console.y;
+}
+
+uint32_t console_get_framebuffer_width(void) {
+    return console.framebuffer.width;
+}
+
+uint32_t console_get_framebuffer_height(void) {
+    return console.framebuffer.height;
 }

@@ -51,5 +51,7 @@ void console_set_cursor(int x, int y);
 void console_tick(void);
 int console_get_x(void);
 int console_get_y(void);
+uint32_t console_get_framebuffer_width(void);
+uint32_t console_get_framebuffer_height(void);
 
 #endif

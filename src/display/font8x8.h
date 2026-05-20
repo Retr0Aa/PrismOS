@@ -1,3 +1,5 @@
+// DEPRECATED!!! Use PSF font instead.
+
 #ifndef PRISMOS_FONT8X8_H
 #define PRISMOS_FONT8X8_H
 

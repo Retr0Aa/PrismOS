@@ -37,7 +37,6 @@ static void command_help(const char* arguments);
 static void command_clear(const char* arguments);
 static void command_echo(const char* arguments);
 static void command_about(const char* arguments);
-static void command_version(const char* arguments);
 static void command_reboot(const char* arguments);
 static void command_shutdown(const char* arguments);
 
@@ -46,8 +45,7 @@ static const Command commands[] = {
     {"help", "show this message", command_help},
     {"clear", "clear the screen", command_clear},
     {"echo", "print text after the command", command_echo},
-    {"about", "show system information", command_about},
-    {"version", "show the PrismOS version", command_version},
+    {"about", "show system information and version", command_about},
     {"reboot", "reboot the machine", command_reboot},
     {"shutdown", "shut down the machine", command_shutdown},
 };
@@ -82,6 +80,8 @@ static void command_about(const char* arguments) {
     (void)arguments;
     const uint32_t total_memory_kb = PRISMOS_TOTAL_MEMORY_KB;
 
+    // Keep the version with the general system summary so users only need one command.
+    console_writeln("PrismOS version 0.1 beta - early development stage");
     console_writeln("PrismOS is running in a 32-bit shell.");
 
     if (total_memory_kb == 0) {
@@ -100,11 +100,6 @@ static void command_about(const char* arguments) {
     console_write("RAM: ");
     console_write_uint(total_memory_kb / 1024U);
     console_writeln(" MB");
-}
-
-static void command_version(const char* arguments) {
-    (void)arguments;
-    console_writeln("PrismOS version 0.1 beta - early development stage");
 }
 
 static void command_reboot(const char* arguments) {

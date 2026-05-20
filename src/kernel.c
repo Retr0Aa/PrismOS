@@ -1,6 +1,7 @@
 #include <stdint.h>
 
 #include "display/console.h"
+#include "display/psf_font.h"
 #include "shell/shell.h"
 
 #include <stddef.h>
@@ -8,6 +9,8 @@
 
 extern unsigned int g_multiboot_magic;
 extern unsigned int g_multiboot_info;
+extern const uint8_t _binary_assets_fonts_cp850_8x16_psf_start[];
+extern const uint8_t _binary_assets_fonts_cp850_8x16_psf_end[];
 
 #define MULTIBOOT2_BOOTLOADER_MAGIC 0x36D76289U
 
@@ -39,38 +42,6 @@ static void kernel_halt(void) {
     }
 }
 
-/* Simple VGA text-mode helpers for early diagnostics when no framebuffer is available. */
-static void textmode_putc(char c) {
-    volatile uint16_t* buf = (volatile uint16_t*)0xB8000;
-    static unsigned int pos = 0;
-
-    if (c == '\n') {
-        unsigned int row = pos / 80;
-        pos = (row + 1) * 80;
-        return;
-    }
-
-    buf[pos++] = (uint16_t)((0x07 << 8) | (uint8_t)c);
-}
-
-static void textmode_write(const char* s) {
-    while (s && *s) {
-        textmode_putc(*s++);
-    }
-}
-
-static void textmode_write_hex(uint32_t value) {
-    const char* hex = "0123456789ABCDEF";
-    char buf[11];
-    buf[0] = '0';
-    buf[1] = 'x';
-    for (int i = 0; i < 8; i++) {
-        buf[2 + i] = hex[(value >> ((7 - i) * 4)) & 0xF];
-    }
-    buf[10] = '\0';
-    textmode_write(buf);
-}
-
 static const struct multiboot_tag* multiboot2_next_tag(const struct multiboot_tag* tag) {
     uintptr_t next = (uintptr_t)tag + ((tag->size + 7U) & ~7U);
     return (const struct multiboot_tag*)next;
@@ -79,6 +50,9 @@ static const struct multiboot_tag* multiboot2_next_tag(const struct multiboot_ta
 void main(void) {
     unsigned int magic = g_multiboot_magic;
     const uint8_t* boot_info = (const uint8_t*)(uintptr_t)g_multiboot_info;
+    const uint8_t* font_start = _binary_assets_fonts_cp850_8x16_psf_start;
+    const uint8_t* font_end = _binary_assets_fonts_cp850_8x16_psf_end;
+    const uint32_t font_size = (uint32_t)(font_end - font_start);
     FramebufferInfo framebuffer = {0};
     int framebuffer_found = 0;
 
@@ -154,6 +128,11 @@ void main(void) {
         }
 
         kernel_halt();
+    }
+
+    if (!psf_font_init(font_start, font_size)) {
+        serial_init();
+        serial_write("PSF load failed, using built-in fallback font\n");
     }
 
     console_init(&framebuffer);

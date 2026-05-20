@@ -19,8 +19,14 @@ boot.o: boot/boot.s | $(BUILD)
 kernel.o: src/kernel.c src/shell/shell.h src/display/console.h | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -c src/kernel.c -o $(BUILD)/kernel.o
 
-console.o: src/display/console.c src/display/console.h src/display/font8x8.h | $(BUILD)
+console.o: src/display/console.c src/display/console.h src/display/psf_font.h | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -c src/display/console.c -o $(BUILD)/console.o
+
+psf_font.o: src/display/psf_font.c src/display/psf_font.h src/display/font8x8.h | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c src/display/psf_font.c -o $(BUILD)/psf_font.o
+
+font_psf.o: assets/fonts/cp850-8x16.psf | $(BUILD)
+	objcopy -I binary -O elf32-i386 -B i386 assets/fonts/cp850-8x16.psf $(BUILD)/font_psf.o
 
 keyboard.o: src/input/keyboard.c src/input/keyboard.h src/platform/io.h | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -c src/input/keyboard.c -o $(BUILD)/keyboard.o
@@ -34,8 +40,8 @@ shell.o: src/shell/shell.c src/shell/shell.h src/commands/command.h src/display/
 command.o: src/commands/command.c src/commands/command.h src/display/console.h src/platform/io.h src/platform/system.h | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -c src/commands/command.c -o $(BUILD)/command.o
 
-kernel.elf: boot.o kernel.o console.o keyboard.o serial.o shell.o command.o boot/linker.ld
-	gcc $(LDFLAGS) $(BUILD)/boot.o $(BUILD)/kernel.o $(BUILD)/console.o $(BUILD)/keyboard.o $(BUILD)/serial.o $(BUILD)/shell.o $(BUILD)/command.o -o $(BUILD)/kernel.elf
+kernel.elf: boot.o kernel.o console.o psf_font.o keyboard.o serial.o shell.o command.o font_psf.o boot/linker.ld
+	gcc $(LDFLAGS) $(BUILD)/boot.o $(BUILD)/kernel.o $(BUILD)/console.o $(BUILD)/psf_font.o $(BUILD)/keyboard.o $(BUILD)/serial.o $(BUILD)/shell.o $(BUILD)/command.o $(BUILD)/font_psf.o -o $(BUILD)/kernel.elf
 
 os.iso: kernel.elf boot/grub.cfg
 	mkdir -p $(ISO_DIR)/boot/grub

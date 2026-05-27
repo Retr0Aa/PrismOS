@@ -1,6 +1,7 @@
 #include "shell.h"
 
 #include "commands/command.h"
+#include "debug/log.h"
 #include "display/console.h"
 #include "input/keyboard.h"
 
@@ -235,6 +236,8 @@ static void shell_handle_event(KeyEvent event) {
 
     switch (event.type) {
         case KEY_EVENT_ENTER:
+            // Log every submitted line before command parsing.
+            DEBUG_LOG("shell submit command");
             console_write_char('\n');
             shell_store_history(shell.line);
             command_execute(shell.line);
@@ -274,6 +277,7 @@ static void shell_handle_event(KeyEvent event) {
 }
 
 void shell_run(void) {
+    DEBUG_LOG("shell_run entered");
     console_clear();
     console_set_color(COLOR_LIGHT_GREEN, COLOR_BLACK);
     console_writeln("PrismOS Loaded!");

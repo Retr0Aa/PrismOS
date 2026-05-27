@@ -1,5 +1,6 @@
 #include <stdint.h>
 
+#include "debug/log.h"
 #include "display/console.h"
 #include "display/psf_font.h"
 #include "shell/shell.h"
@@ -48,6 +49,8 @@ static const struct multiboot_tag* multiboot2_next_tag(const struct multiboot_ta
 }
 
 void main(void) {
+    // First log point confirms kernel reached C entry.
+    DEBUG_LOG("kernel entry");
     unsigned int magic = g_multiboot_magic;
     const uint8_t* boot_info = (const uint8_t*)(uintptr_t)g_multiboot_info;
     const uint8_t* font_start = _binary_assets_fonts_cp850_8x16_psf_start;
@@ -57,6 +60,7 @@ void main(void) {
     int framebuffer_found = 0;
 
     if (magic != MULTIBOOT2_BOOTLOADER_MAGIC) {
+        ERROR_LOG("invalid multiboot magic");
         kernel_halt();
     }
 
@@ -103,6 +107,7 @@ void main(void) {
     }
 
     if (!framebuffer_found) {
+        ERROR_LOG("no framebuffer tag found");
         /* Initialize serial early so we have output on UEFI/modern machines */
         serial_init();
         serial_write("No framebuffer found. Using serial fallback for diagnostics.\n");
@@ -131,12 +136,17 @@ void main(void) {
     }
 
     if (!psf_font_init(font_start, font_size)) {
+        WARNINIG_LOG("PSF font load failed, using fallback");
         serial_init();
         serial_write("PSF load failed, using built-in fallback font\n");
     }
 
+    // Console init is a key transition from boot parsing to interactive output.
+    DEBUG_LOG("initializing console");
     console_init(&framebuffer);
 
+    // Shell startup marks readiness for user commands.
+    DEBUG_LOG("starting shell loop");
     shell_run();
 }
 

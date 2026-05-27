@@ -1,5 +1,7 @@
 #include "command.h"
 
+#include "comport/comport.h"
+#include "debug/log.h"
 #include "display/console.h"
 #include "platform/io.h"
 #include "platform/system.h"
@@ -33,12 +35,23 @@ static const char* skip_spaces(const char* text) {
     return text;
 }
 
+static unsigned int string_length(const char* text) {
+    unsigned int len = 0;
+
+    while (text[len] != '\0') {
+        len++;
+    }
+
+    return len;
+}
+
 static void command_help(const char* arguments);
 static void command_clear(const char* arguments);
 static void command_echo(const char* arguments);
 static void command_about(const char* arguments);
 static void command_reboot(const char* arguments);
 static void command_shutdown(const char* arguments);
+static void command_comport(const char* arguments);
 
 // One registry powers execution and help output, so adding commands stays local.
 static const Command commands[] = {
@@ -48,6 +61,7 @@ static const Command commands[] = {
     {"about", "show system information and version", command_about},
     {"reboot", "reboot the machine", command_reboot},
     {"shutdown", "shut down the machine", command_shutdown},
+    {"comport", "send text to COM1 serial port", command_comport},
 };
 
 static const int command_count = (int)(sizeof(commands) / sizeof(commands[0]));
@@ -64,20 +78,24 @@ static const Command* command_find(const char* name) {
 
 static void command_help(const char* arguments) {
     (void)arguments;
+    DEBUG_LOG("help command executed");
     command_print_help();
 }
 
 static void command_clear(const char* arguments) {
     (void)arguments;
+    DEBUG_LOG("clear command executed");
     console_clear();
 }
 
 static void command_echo(const char* arguments) {
+    DEBUG_LOG("echo command executed");
     console_writeln(arguments);
 }
 
 static void command_about(const char* arguments) {
     (void)arguments;
+    DEBUG_LOG("about command executed");
     const uint32_t total_memory_kb = PRISMOS_TOTAL_MEMORY_KB;
 
     // Keep the version with the general system summary so users only need one command.
@@ -104,14 +122,39 @@ static void command_about(const char* arguments) {
 
 static void command_reboot(const char* arguments) {
     (void)arguments;
+    WARNINIG_LOG("reboot command executed");
     console_writeln("Rebooting...");
     reboot_system();
 }
 
 static void command_shutdown(const char* arguments) {
     (void)arguments;
+    WARNINIG_LOG("shutdown command executed");
     console_writeln("Shutting down...");
     shutdown_system();
+}
+
+static void command_comport(const char* arguments) {
+    if (*arguments == '\0') {
+        WARNINIG_LOG("comport command missing arguments");
+        console_writeln("Usage: comport <text>");
+        return;
+    }
+
+    if (comport_init() != 0) {
+        ERROR_LOG("COM1 initialization failed in comport command");
+        console_writeln("COM1 init failed");
+        return;
+    }
+
+    // Forward user-provided payload directly to COM1 for live diagnostics.
+    DEBUG_LOG("comport command writing data to COM1");
+    comport_write_string(arguments);
+    comport_write_char('\n');
+
+    console_write("Sent ");
+    console_write_uint(string_length(arguments));
+    console_writeln(" bytes to COM1");
 }
 
 void command_print_help(void) {
@@ -132,6 +175,7 @@ void command_execute(const char* line) {
 
     line = skip_spaces(line);
     if (*line == '\0') {
+        DEBUG_LOG("empty command ignored");
         return;
     }
 
@@ -145,10 +189,13 @@ void command_execute(const char* line) {
 
     const Command* command = command_find(command_name);
     if (command != 0) {
+        // Emit one trace per successful command before handing over control.
+        DEBUG_LOG("command resolved and dispatched");
         command->handler(arguments);
         return;
     }
 
+    WARNINIG_LOG("unknown command entered");
     console_write("Unknown command: ");
     console_writeln(command_name);
 }

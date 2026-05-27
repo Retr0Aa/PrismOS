@@ -28,4 +28,7 @@ Notes:
 
 If you want a reproducible cross-toolchain build, replace the host `gcc` invocations with an i686-elf cross-compiler and adjust the Makefile accordingly.
 
-For development, edit sources under `src/`, then re-run `make kernel.elf` (or `make run`).
+# Developing and Contributing to PrismOS
+> [!IMPORTANT]
+> All code you commit must be clean and have comments.
+> For development, edit sources under `src/`, then re-run `make run`.

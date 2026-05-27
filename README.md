@@ -7,7 +7,7 @@ PrismOS is a small hobby operating system that boots via GRUB and runs on x86 ha
 Install the build dependencies (example for Debian/Ubuntu):
 
 ```shell
-sudo apt-get install build-essential nasm gcc-multilib xorriso qemu-system-x86
+sudo apt-get install build-essential nasm gcc-multilib xorriso qemu-system-x86 grub-common grub-pc-bin mtools
 ```
 
 Build and run:

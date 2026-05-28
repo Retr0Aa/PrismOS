@@ -23,6 +23,7 @@ typedef struct {
 
 /* Callback signature for all registered interrupt handlers. */
 typedef void (*irq_handler_t)(registers_t *regs);
+typedef void (*exception_handler_t)(registers_t *regs);
 
 /* -------------------------------------------------------------------------
  * Initialise the IRQ handler table (all slots empty).
@@ -34,6 +35,10 @@ void irq_init(void);
  * functions — no changes anywhere else are needed. */
 void irq_register_handler(uint8_t irq, irq_handler_t handler);
 void irq_unregister_handler(uint8_t irq);
+
+/* Register / unregister a CPU exception handler for vectors 0-31. */
+void exception_register_handler(uint8_t vector, exception_handler_t handler);
+void exception_unregister_handler(uint8_t vector);
 
 /* -------------------------------------------------------------------------
  * Called from isr_stubs.s — do not call directly.

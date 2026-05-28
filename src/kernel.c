@@ -4,6 +4,9 @@
 #include "display/console.h"
 #include "display/psf_font.h"
 #include "shell/shell.h"
+#include "interrupts/interrupts.h"
+#include "input/keyboard.h"
+#include "comport/comport.h"
 
 #include <stddef.h>
 #include "display/serial.h"
@@ -147,6 +150,9 @@ void main(void) {
 
     // Shell startup marks readiness for user commands.
     DEBUG_LOG("starting shell loop");
+    interrupts_init();
+    keyboard_init();
+    comport_irq_init();
     shell_run();
 }
 

@@ -7,6 +7,8 @@
 #include "interrupts/interrupts.h"
 #include "input/keyboard.h"
 #include "comport/comport.h"
+#include "memory/pmm.h"
+#include "memory/paging.h"
 
 #include <stddef.h>
 #include "display/serial.h"
@@ -147,6 +149,9 @@ void main(void) {
     // Console init is a key transition from boot parsing to interactive output.
     DEBUG_LOG("initializing console");
     console_init(&framebuffer);
+
+    pmm_init(boot_info, &framebuffer);
+    paging_init(&framebuffer);
 
     // Shell startup marks readiness for user commands.
     DEBUG_LOG("starting shell loop");

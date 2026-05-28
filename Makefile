@@ -69,10 +69,17 @@ interrupts.o: src/interrupts/interrupts.c src/interrupts/interrupts.h src/interr
 ringbuf.o: src/util/ringbuf.c src/util/ringbuf.h | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -c src/util/ringbuf.c -o $(BUILD)/ringbuf.o
 
-INTERRUPT_OBJS = $(BUILD)/gdt.o $(BUILD)/pic.o $(BUILD)/isr_stubs.o $(BUILD)/idt.o $(BUILD)/irq.o $(BUILD)/interrupts.o $(BUILD)/ringbuf.o
+pmm.o: src/memory/pmm.c src/memory/pmm.h src/platform/system.h src/display/console.h src/debug/log.h boot/linker.ld | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c src/memory/pmm.c -o $(BUILD)/pmm.o
 
-kernel.elf: boot.o kernel.o console.o psf_font.o keyboard.o serial.o comport.o log.o shell.o command.o font_psf.o gdt.o pic.o isr_stubs.o idt.o irq.o interrupts.o ringbuf.o boot/linker.ld
-	gcc $(LDFLAGS) $(BUILD)/boot.o $(BUILD)/kernel.o $(BUILD)/console.o $(BUILD)/psf_font.o $(BUILD)/keyboard.o $(BUILD)/serial.o $(BUILD)/comport.o $(BUILD)/log.o $(BUILD)/shell.o $(BUILD)/command.o $(BUILD)/font_psf.o $(INTERRUPT_OBJS) -o $(BUILD)/kernel.elf
+paging.o: src/memory/paging.c src/memory/paging.h src/memory/pmm.h src/platform/io.h src/interrupts/irq.h src/debug/log.h src/display/console.h boot/linker.ld | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c src/memory/paging.c -o $(BUILD)/paging.o
+
+INTERRUPT_OBJS = $(BUILD)/gdt.o $(BUILD)/pic.o $(BUILD)/isr_stubs.o $(BUILD)/idt.o $(BUILD)/irq.o $(BUILD)/interrupts.o $(BUILD)/ringbuf.o
+MEMORY_OBJS = $(BUILD)/pmm.o $(BUILD)/paging.o
+
+kernel.elf: boot.o kernel.o console.o psf_font.o keyboard.o serial.o comport.o log.o shell.o command.o font_psf.o gdt.o pic.o isr_stubs.o idt.o irq.o interrupts.o ringbuf.o pmm.o paging.o boot/linker.ld
+	gcc $(LDFLAGS) $(BUILD)/boot.o $(BUILD)/kernel.o $(BUILD)/console.o $(BUILD)/psf_font.o $(BUILD)/keyboard.o $(BUILD)/serial.o $(BUILD)/comport.o $(BUILD)/log.o $(BUILD)/shell.o $(BUILD)/command.o $(BUILD)/font_psf.o $(INTERRUPT_OBJS) $(MEMORY_OBJS) -o $(BUILD)/kernel.elf
 
 os.iso: kernel.elf boot/grub.cfg
 	mkdir -p $(ISO_DIR)/boot/grub

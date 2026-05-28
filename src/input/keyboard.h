@@ -20,6 +20,13 @@ typedef struct {
     char character;
 } KeyEvent;
 
+/* Registers the keyboard IRQ handler (IRQ1) and unmasks the IRQ line.
+ * Must be called after interrupts_init(). */
+void keyboard_init(void);
+
+/* Block until a key event is available, then return it.
+ * With interrupt-driven input this uses 'hlt' to sleep between interrupts
+ * instead of busy-polling the hardware port. */
 KeyEvent keyboard_read_event(void);
 
 #endif

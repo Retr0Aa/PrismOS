@@ -1,11 +1,47 @@
 #include "keyboard.h"
 
-#include "display/console.h"
+#include "interrupts/irq.h"
 #include "platform/io.h"
+#include "platform/pic.h"
+#include "debug/log.h"
 
-#define KEYBOARD_DATA_PORT 0x60
+#define KEYBOARD_DATA_PORT   0x60
 #define KEYBOARD_STATUS_PORT 0x64
 
+/* -------------------------------------------------------------------------
+ * KeyEvent ring buffer — written by the IRQ handler, read by the shell.
+ * ---------------------------------------------------------------------- */
+#define KB_QUEUE_SIZE 64U
+
+typedef struct {
+    KeyEvent buf[KB_QUEUE_SIZE];
+    uint32_t head;
+    uint32_t tail;
+} KeyEventQueue;
+
+static KeyEventQueue kb_queue;
+
+static int kb_queue_empty(void)  { return kb_queue.head == kb_queue.tail; }
+static int kb_queue_full(void)   { return ((kb_queue.head + 1U) % KB_QUEUE_SIZE) == kb_queue.tail; }
+
+static void kb_queue_push(KeyEvent ev)
+{
+    if (!kb_queue_full()) {
+        kb_queue.buf[kb_queue.head] = ev;
+        kb_queue.head = (kb_queue.head + 1U) % KB_QUEUE_SIZE;
+    }
+}
+
+static KeyEvent kb_queue_pop(void)
+{
+    KeyEvent ev = kb_queue.buf[kb_queue.tail];
+    kb_queue.tail = (kb_queue.tail + 1U) % KB_QUEUE_SIZE;
+    return ev;
+}
+
+/* -------------------------------------------------------------------------
+ * Scancode translation tables
+ * ---------------------------------------------------------------------- */
 static const char keyboard_map[128] = {
     0, 27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=',
     '\b', '\t', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']',
@@ -26,96 +62,97 @@ static int keyboard_data_available(void) {
     return (inb(KEYBOARD_STATUS_PORT) & 1) != 0;
 }
 
-static unsigned char keyboard_read_scancode(void) {
-    static unsigned int poll_counter = 0;
-    while (!keyboard_data_available()) {
-        /* Rate-limit console_tick to avoid extremely fast blinking when polling.
-         * Use a much larger interval so blinking isn't driven by tight polling loops.
-         */
-        poll_counter++;
-        if ((poll_counter & 0x3FFF) == 0) { /* every 16384 iterations */
-            console_tick();
-        }
-        cpu_relax();
-    }
-    poll_counter = 0;
+/* -------------------------------------------------------------------------
+ * IRQ1 handler — runs with interrupts disabled.
+ * Reads one scancode, converts it to a KeyEvent, queues it.
+ * ---------------------------------------------------------------------- */
+static void keyboard_irq_handler(registers_t *regs)
+{
+    (void)regs;
 
-    return inb(KEYBOARD_DATA_PORT);
+    static int extended_prefix = 0;
+    static int shift_pressed   = 0;
+    static int caps_lock       = 0;
+    static int first_invocation = 1;
+
+    if (first_invocation) {
+        DEBUG_LOG("keyboard_irq_handler: first interrupt on IRQ1");
+        first_invocation = 0;
+    }
+
+    /* Read the scancode only if data is actually available (guards against
+     * spurious invocations). */
+    if (!keyboard_data_available()) {
+        return;
+    }
+
+    unsigned char scancode = inb(KEYBOARD_DATA_PORT);
+
+    if (scancode == 0xE0) {
+        extended_prefix = 1;
+        return;
+    }
+
+    /* Key-release events */
+    if (scancode & 0x80) {
+        unsigned char key = (unsigned char)(scancode & 0x7F);
+        if (key == 42 || key == 54) { /* left/right shift */
+            shift_pressed = 0;
+        }
+        extended_prefix = 0;
+        return;
+    }
+
+    if (extended_prefix) {
+        extended_prefix = 0;
+        KeyEvent ev = {KEY_EVENT_NONE, 0};
+        switch (scancode) {
+            case 0x48: ev.type = KEY_EVENT_UP;     break;
+            case 0x50: ev.type = KEY_EVENT_DOWN;   break;
+            case 0x4B: ev.type = KEY_EVENT_LEFT;   break;
+            case 0x4D: ev.type = KEY_EVENT_RIGHT;  break;
+            case 0x47: ev.type = KEY_EVENT_HOME;   break;
+            case 0x4F: ev.type = KEY_EVENT_END;    break;
+            case 0x53: ev.type = KEY_EVENT_DELETE; break;
+            default:   return;
+        }
+        kb_queue_push(ev);
+        return;
+    }
+
+    if (scancode == 42 || scancode == 54) { shift_pressed = 1; return; }
+    if (scancode == 58) { caps_lock = !caps_lock; return; }
+    if (scancode == 14) { kb_queue_push((KeyEvent){KEY_EVENT_BACKSPACE, 0}); return; }
+    if (scancode == 28) { kb_queue_push((KeyEvent){KEY_EVENT_ENTER,     0}); return; }
+    if (scancode >= 128 || keyboard_map[scancode] == 0) { return; }
+
+    char character = shift_pressed ? keyboard_shift_map[scancode] : keyboard_map[scancode];
+    if (caps_lock && character >= 'a' && character <= 'z') {
+        character = (char)(character - 'a' + 'A');
+    } else if (caps_lock && character >= 'A' && character <= 'Z') {
+        character = (char)(character - 'A' + 'a');
+    }
+
+    kb_queue_push((KeyEvent){KEY_EVENT_CHARACTER, character});
 }
 
-KeyEvent keyboard_read_event(void) {
-    static int extended_prefix = 0;
-    static int shift_pressed = 0;
-    static int caps_lock = 0;
+/* -------------------------------------------------------------------------
+ * Public API
+ * ---------------------------------------------------------------------- */
+void keyboard_init(void)
+{
+    kb_queue.head = 0;
+    kb_queue.tail = 0;
 
-    for (;;) {
-        const unsigned char scancode = keyboard_read_scancode();
+    irq_register_handler(1, keyboard_irq_handler);
+    pic_unmask_irq(1);
+}
 
-        if (scancode == 0xE0) {
-            extended_prefix = 1;
-            continue;
-        }
-
-        if (scancode & 0x80) {
-            const unsigned char key = (unsigned char)(scancode & 0x7F);
-
-            if (key == 42 || key == 54) {
-                shift_pressed = 0;
-            }
-
-            extended_prefix = 0;
-            continue;
-        }
-
-        if (extended_prefix) {
-            extended_prefix = 0;
-
-            switch (scancode) {
-                case 0x48: return (KeyEvent){KEY_EVENT_UP, 0};
-                case 0x50: return (KeyEvent){KEY_EVENT_DOWN, 0};
-                case 0x4B: return (KeyEvent){KEY_EVENT_LEFT, 0};
-                case 0x4D: return (KeyEvent){KEY_EVENT_RIGHT, 0};
-                case 0x47: return (KeyEvent){KEY_EVENT_HOME, 0};
-                case 0x4F: return (KeyEvent){KEY_EVENT_END, 0};
-                case 0x53: return (KeyEvent){KEY_EVENT_DELETE, 0};
-                default: continue;
-            }
-        }
-
-        if (scancode == 42 || scancode == 54) {
-            shift_pressed = 1;
-            continue;
-        }
-
-        if (scancode == 58) {
-            caps_lock = !caps_lock;
-            continue;
-        }
-
-        if (scancode == 14) {
-            return (KeyEvent){KEY_EVENT_BACKSPACE, 0};
-        }
-
-        if (scancode == 28) {
-            return (KeyEvent){KEY_EVENT_ENTER, 0};
-        }
-
-        if (scancode >= 128) {
-            continue;
-        }
-
-        if (keyboard_map[scancode] == 0) {
-            continue;
-        }
-
-        char character = shift_pressed ? keyboard_shift_map[scancode] : keyboard_map[scancode];
-
-        if (caps_lock && character >= 'a' && character <= 'z') {
-            character = (char)(character - 'a' + 'A');
-        } else if (caps_lock && character >= 'A' && character <= 'Z') {
-            character = (char)(character - 'A' + 'a');
-        }
-
-        return (KeyEvent){KEY_EVENT_CHARACTER, character};
+KeyEvent keyboard_read_event(void)
+{
+    /* Sleep with 'hlt' until the IRQ handler deposits an event. */
+    while (kb_queue_empty()) {
+        __asm__ volatile("hlt");
     }
+    return kb_queue_pop();
 }

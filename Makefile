@@ -48,8 +48,31 @@ shell.o: src/shell/shell.c src/shell/shell.h src/debug/log.h src/commands/comman
 command.o: src/commands/command.c src/commands/command.h src/debug/log.h src/comport/comport.h src/display/console.h src/platform/io.h src/platform/system.h | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -c src/commands/command.c -o $(BUILD)/command.o
 
-kernel.elf: boot.o kernel.o console.o psf_font.o keyboard.o serial.o comport.o log.o shell.o command.o font_psf.o boot/linker.ld
-	gcc $(LDFLAGS) $(BUILD)/boot.o $(BUILD)/kernel.o $(BUILD)/console.o $(BUILD)/psf_font.o $(BUILD)/keyboard.o $(BUILD)/serial.o $(BUILD)/comport.o $(BUILD)/log.o $(BUILD)/shell.o $(BUILD)/command.o $(BUILD)/font_psf.o -o $(BUILD)/kernel.elf
+gdt.o: src/platform/gdt.c src/platform/gdt.h | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c src/platform/gdt.c -o $(BUILD)/gdt.o
+
+pic.o: src/platform/pic.c src/platform/pic.h src/platform/io.h | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c src/platform/pic.c -o $(BUILD)/pic.o
+
+isr_stubs.o: src/interrupts/isr_stubs.s | $(BUILD)
+	gcc -m32 -c src/interrupts/isr_stubs.s -o $(BUILD)/isr_stubs.o
+
+idt.o: src/interrupts/idt.c src/interrupts/idt.h src/interrupts/irq.h | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c src/interrupts/idt.c -o $(BUILD)/idt.o
+
+irq.o: src/interrupts/irq.c src/interrupts/irq.h src/platform/pic.h src/debug/log.h | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c src/interrupts/irq.c -o $(BUILD)/irq.o
+
+interrupts.o: src/interrupts/interrupts.c src/interrupts/interrupts.h src/interrupts/idt.h src/interrupts/irq.h src/platform/gdt.h src/platform/pic.h src/debug/log.h | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c src/interrupts/interrupts.c -o $(BUILD)/interrupts.o
+
+ringbuf.o: src/util/ringbuf.c src/util/ringbuf.h | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c src/util/ringbuf.c -o $(BUILD)/ringbuf.o
+
+INTERRUPT_OBJS = $(BUILD)/gdt.o $(BUILD)/pic.o $(BUILD)/isr_stubs.o $(BUILD)/idt.o $(BUILD)/irq.o $(BUILD)/interrupts.o $(BUILD)/ringbuf.o
+
+kernel.elf: boot.o kernel.o console.o psf_font.o keyboard.o serial.o comport.o log.o shell.o command.o font_psf.o gdt.o pic.o isr_stubs.o idt.o irq.o interrupts.o ringbuf.o boot/linker.ld
+	gcc $(LDFLAGS) $(BUILD)/boot.o $(BUILD)/kernel.o $(BUILD)/console.o $(BUILD)/psf_font.o $(BUILD)/keyboard.o $(BUILD)/serial.o $(BUILD)/comport.o $(BUILD)/log.o $(BUILD)/shell.o $(BUILD)/command.o $(BUILD)/font_psf.o $(INTERRUPT_OBJS) -o $(BUILD)/kernel.elf
 
 os.iso: kernel.elf boot/grub.cfg
 	mkdir -p $(ISO_DIR)/boot/grub

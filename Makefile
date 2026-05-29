@@ -45,8 +45,17 @@ comport.o: src/comport/comport.c src/comport/comport.h src/platform/io.h | $(BUI
 shell.o: src/shell/shell.c src/shell/shell.h src/debug/log.h src/commands/command.h src/display/console.h src/input/keyboard.h | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -c src/shell/shell.c -o $(BUILD)/shell.o
 
-command.o: src/commands/command.c src/commands/command.h src/debug/log.h src/comport/comport.h src/display/console.h src/platform/io.h src/platform/system.h | $(BUILD)
+command.o: src/commands/command.c src/commands/command.h src/debug/log.h src/comport/comport.h src/display/console.h src/platform/io.h src/platform/system.h src/filesystem/vfs.h | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -c src/commands/command.c -o $(BUILD)/command.o
+
+blockdev.o: src/filesystem/blockdev.c src/filesystem/blockdev.h src/debug/log.h src/platform/io.h | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c src/filesystem/blockdev.c -o $(BUILD)/blockdev.o
+
+fat32.o: src/filesystem/fat32/fat32.c src/filesystem/fat32/fat32.h src/filesystem/blockdev.h src/debug/log.h | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c src/filesystem/fat32/fat32.c -o $(BUILD)/fat32.o
+
+vfs.o: src/filesystem/vfs.c src/filesystem/vfs.h src/filesystem/fat32/fat32.h | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c src/filesystem/vfs.c -o $(BUILD)/vfs.o
 
 gdt.o: src/platform/gdt.c src/platform/gdt.h | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -c src/platform/gdt.c -o $(BUILD)/gdt.o
@@ -77,9 +86,10 @@ paging.o: src/memory/paging.c src/memory/paging.h src/memory/pmm.h src/platform/
 
 INTERRUPT_OBJS = $(BUILD)/gdt.o $(BUILD)/pic.o $(BUILD)/isr_stubs.o $(BUILD)/idt.o $(BUILD)/irq.o $(BUILD)/interrupts.o $(BUILD)/ringbuf.o
 MEMORY_OBJS = $(BUILD)/pmm.o $(BUILD)/paging.o
+FS_OBJS = $(BUILD)/blockdev.o $(BUILD)/fat32.o $(BUILD)/vfs.o
 
-kernel.elf: boot.o kernel.o console.o psf_font.o keyboard.o serial.o comport.o log.o shell.o command.o font_psf.o gdt.o pic.o isr_stubs.o idt.o irq.o interrupts.o ringbuf.o pmm.o paging.o boot/linker.ld
-	gcc $(LDFLAGS) $(BUILD)/boot.o $(BUILD)/kernel.o $(BUILD)/console.o $(BUILD)/psf_font.o $(BUILD)/keyboard.o $(BUILD)/serial.o $(BUILD)/comport.o $(BUILD)/log.o $(BUILD)/shell.o $(BUILD)/command.o $(BUILD)/font_psf.o $(INTERRUPT_OBJS) $(MEMORY_OBJS) -o $(BUILD)/kernel.elf
+kernel.elf: boot.o kernel.o console.o psf_font.o keyboard.o serial.o comport.o log.o shell.o command.o blockdev.o fat32.o vfs.o font_psf.o gdt.o pic.o isr_stubs.o idt.o irq.o interrupts.o ringbuf.o pmm.o paging.o boot/linker.ld
+	gcc $(LDFLAGS) $(BUILD)/boot.o $(BUILD)/kernel.o $(BUILD)/console.o $(BUILD)/psf_font.o $(BUILD)/keyboard.o $(BUILD)/serial.o $(BUILD)/comport.o $(BUILD)/log.o $(BUILD)/shell.o $(BUILD)/command.o $(FS_OBJS) $(BUILD)/font_psf.o $(INTERRUPT_OBJS) $(MEMORY_OBJS) -o $(BUILD)/kernel.elf
 
 os.iso: kernel.elf boot/grub.cfg
 	mkdir -p $(ISO_DIR)/boot/grub
@@ -87,14 +97,19 @@ os.iso: kernel.elf boot/grub.cfg
 	cp boot/grub.cfg $(ISO_DIR)/boot/grub/grub.cfg
 	grub-mkrescue -o $(BUILD)/os.iso $(ISO_DIR)
 
-run: os.iso
-	qemu-system-x86_64 -cdrom $(BUILD)/os.iso
+$(BUILD)/disk.img:
+	truncate -s 64M $(BUILD)/disk.img
 
-run-serial: os.iso
-	qemu-system-x86_64 -cdrom $(BUILD)/os.iso -serial stdio -monitor none
+disk.img: $(BUILD)/disk.img
 
-run-serial-log: os.iso
-	qemu-system-x86_64 -cdrom $(BUILD)/os.iso -serial file:$(BUILD)/serial.log
+run: os.iso $(BUILD)/disk.img
+	qemu-system-x86_64 -cdrom $(BUILD)/os.iso -drive file=$(BUILD)/disk.img,format=raw,if=ide,index=0,media=disk -monitor none
+
+run-serial: os.iso $(BUILD)/disk.img
+	qemu-system-x86_64 -cdrom $(BUILD)/os.iso -drive file=$(BUILD)/disk.img,format=raw,if=ide,index=0,media=disk -serial stdio -monitor none
+
+run-serial-log: os.iso $(BUILD)/disk.img
+	qemu-system-x86_64 -cdrom $(BUILD)/os.iso -drive file=$(BUILD)/disk.img,format=raw,if=ide,index=0,media=disk -serial file:$(BUILD)/serial.log -monitor none
 
 clean:
 	rm -rf $(BUILD)

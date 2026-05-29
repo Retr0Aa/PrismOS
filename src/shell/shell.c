@@ -71,12 +71,15 @@ static void shell_set_line(const char* text) {
 }
 
 static void shell_render_input(void) {
+    const char* cwd = command_get_cwd();
+
     console_set_cursor(0, shell.prompt_row);
     console_clear_row(shell.prompt_row);
     console_set_cursor(0, shell.prompt_row);
-    console_write(SHELL_PROMPT);
+    console_write(cwd);
+    console_write("> ");
     console_write(shell.line);
-    console_set_cursor((int)string_length(SHELL_PROMPT) + shell.cursor, shell.prompt_row);
+    console_set_cursor((int)string_length(cwd) + 2 + shell.cursor, shell.prompt_row);
 }
 
 static void shell_refresh_line(void) {
@@ -217,8 +220,9 @@ static void shell_show_prompt(void) {
     shell_reset_history_navigation();
     console_clear_row(shell.prompt_row);
     console_set_cursor(0, shell.prompt_row);
-    console_write(SHELL_PROMPT);
-    console_set_cursor((int)string_length(SHELL_PROMPT), shell.prompt_row);
+    console_write(command_get_cwd());
+    console_write("> ");
+    console_set_cursor((int)string_length(command_get_cwd()) + 2, shell.prompt_row);
 }
 
 static void shell_handle_event(KeyEvent event) {

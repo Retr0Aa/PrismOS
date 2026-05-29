@@ -3,5 +3,6 @@
 
 void command_execute(const char* line);
 void command_print_help(void);
+const char* command_get_cwd(void);
 
 #endif

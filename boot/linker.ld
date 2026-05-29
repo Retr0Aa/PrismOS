@@ -6,6 +6,7 @@ SECTIONS
 
     .multiboot : {
         KEEP(*(.multiboot))
+        KEEP(*(.multiboot2_header))
     }
 
     . = 1M;

@@ -17,6 +17,12 @@ static inline uint8_t inb(uint16_t port) {
     return value;
 }
 
+static inline uint16_t inw(uint16_t port) {
+    uint16_t value;
+    __asm__ volatile ("inw %1, %0" : "=a"(value) : "Nd"(port));
+    return value;
+}
+
 static inline uint32_t read_cr0(void) {
     uint32_t value;
     __asm__ volatile ("mov %%cr0, %0" : "=r"(value));

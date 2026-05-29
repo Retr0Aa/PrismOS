@@ -9,6 +9,8 @@
 #include "comport/comport.h"
 #include "memory/pmm.h"
 #include "memory/paging.h"
+#include "filesystem/blockdev.h"
+#include "filesystem/vfs.h"
 
 #include <stddef.h>
 #include "display/serial.h"
@@ -158,6 +160,17 @@ void main(void) {
     interrupts_init();
     keyboard_init();
     comport_irq_init();
+
+    if (blockdev_init_disk() != 0) {
+        ERROR_LOG("storage init failed");
+        console_writeln("Storage initialization failed");
+    } else if (vfs_init() != 0) {
+        ERROR_LOG("filesystem init failed");
+        console_writeln("Filesystem initialization failed");
+    } else {
+        DEBUG_LOG("filesystem mounted");
+    }
+
     shell_run();
 }
 

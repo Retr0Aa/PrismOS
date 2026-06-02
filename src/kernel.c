@@ -11,6 +11,7 @@
 #include "memory/paging.h"
 #include "filesystem/blockdev.h"
 #include "filesystem/vfs.h"
+#include "apps/app_manager.h"
 
 #include <stddef.h>
 #include "display/serial.h"
@@ -169,6 +170,10 @@ void main(void) {
         console_writeln("Filesystem initialization failed");
     } else {
         DEBUG_LOG("filesystem mounted");
+        if (app_manager_init() != 0) {
+            ERROR_LOG("app manager init failed");
+            console_writeln("Application manager initialization failed");
+        }
     }
 
     shell_run();

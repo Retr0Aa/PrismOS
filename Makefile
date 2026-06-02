@@ -103,13 +103,13 @@ $(BUILD)/disk.img:
 disk.img: $(BUILD)/disk.img
 
 run: os.iso $(BUILD)/disk.img
-	qemu-system-x86_64 -cdrom $(BUILD)/os.iso -drive file=$(BUILD)/disk.img,format=raw,if=ide,index=0,media=disk -monitor none
+	qemu-system-x86_64 -boot order=d -cdrom $(BUILD)/os.iso -drive file=$(BUILD)/disk.img,format=raw,if=ide,index=0,media=disk -monitor none
 
 run-serial: os.iso $(BUILD)/disk.img
-	qemu-system-x86_64 -cdrom $(BUILD)/os.iso -drive file=$(BUILD)/disk.img,format=raw,if=ide,index=0,media=disk -serial stdio -monitor none
+	qemu-system-x86_64 -boot order=d -cdrom $(BUILD)/os.iso -drive file=$(BUILD)/disk.img,format=raw,if=ide,index=0,media=disk -serial stdio -monitor none
 
 run-serial-log: os.iso $(BUILD)/disk.img
-	qemu-system-x86_64 -cdrom $(BUILD)/os.iso -drive file=$(BUILD)/disk.img,format=raw,if=ide,index=0,media=disk -serial file:$(BUILD)/serial.log -monitor none
+	qemu-system-x86_64 -boot order=d -cdrom $(BUILD)/os.iso -drive file=$(BUILD)/disk.img,format=raw,if=ide,index=0,media=disk -serial file:$(BUILD)/serial.log -monitor none
 
 clean:
 	rm -rf $(BUILD)

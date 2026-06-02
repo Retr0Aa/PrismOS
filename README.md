@@ -36,3 +36,65 @@ If you want a reproducible cross-toolchain build, replace the host `gcc` invocat
 > [!IMPORTANT]
 > All code you commit must be clean and have comments.
 > For development, edit sources under `src/`, then re-run `make run`.
+
+## Subset C Compiler (prismcc)
+
+PrismOS includes a lightweight subset-C pipeline that targets a bytecode VM inside the OS.
+
+Build the compiler:
+
+```shell
+make prismcc
+```
+
+Compile a program to a Prism app package:
+
+```shell
+cat > hello.c <<'EOF'
+int main() {
+		int a = 2 + 3;
+		print("Hello from prismcc");
+		print_int(a * 10);
+		return 0;
+}
+EOF
+
+./build/prismcc hello.c hello.app
+```
+
+Copy the generated app to PrismOS disk content (8.3 FAT name recommended), then run in PrismOS shell:
+
+```text
+app-run /HELLO.APP
+```
+
+### Supported Subset
+
+- One function: `int main() { ... }`
+- Statements:
+	- `int x = expr;`
+	- `x = expr;`
+	- `print("text");`
+	- `print_int(expr);`
+	- `return expr;`
+- Expressions: integer literals, variables, `+ - * /`, unary `-`, parentheses
+
+The compiler emits Prism app containers with a BCVM bytecode payload, and PrismOS runs them through the in-kernel bytecode VM.
+
+## Native Compiler Inside PrismOS
+
+PrismOS now includes an in-OS subset C compiler command:
+
+```text
+cc <input.c> <output.app>
+```
+
+Example flow from PrismOS shell:
+
+```text
+edit /HELLO.C
+cc /HELLO.C /HELLO.APP
+app-run /HELLO.APP
+```
+
+This uses the same subset language as `prismcc` and compiles directly on the PrismOS filesystem.

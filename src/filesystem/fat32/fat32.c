@@ -10,6 +10,7 @@
 #define FAT32_ATTR_LFN 0x0FU
 #define FAT32_CLUSTER_FREE 0x00000000U
 #define FAT32_CLUSTER_EOC 0x0FFFFFFFU
+#define FAT32_CLUSTER_EOC_MIN 0x0FFFFFF8U
 
 typedef struct {
     int mounted;
@@ -31,6 +32,9 @@ typedef struct {
 } DirEntryRef;
 
 static Fat32State fs = {0};
+
+static int allocate_cluster(uint32_t* out_cluster);
+static int free_cluster_chain(uint32_t start_cluster);
 
 static uint16_t read_u16le(const uint8_t* source) {
     return (uint16_t)(source[0] | ((uint16_t)source[1] << 8));
@@ -100,18 +104,48 @@ static uint32_t cluster_to_sector(uint32_t cluster) {
     return fs.data_start_sector + ((cluster - 2U) * (uint32_t)fs.sectors_per_cluster);
 }
 
+static uint32_t cluster_bytes(void) {
+    return (uint32_t)fs.bytes_per_sector * (uint32_t)fs.sectors_per_cluster;
+}
+
+static uint32_t fat_entry_capacity(void) {
+    return ((uint32_t)fs.sectors_per_fat * (uint32_t)BLOCKDEV_SECTOR_SIZE) / 4U;
+}
+
+static int is_data_cluster(uint32_t cluster) {
+    return cluster >= 2U && cluster < FAT32_CLUSTER_EOC_MIN;
+}
+
+static uint32_t clamp_cluster_limit(uint32_t by_layout) {
+    uint32_t by_fat = fat_entry_capacity();
+
+    if (by_fat < 2U) {
+        return 2U;
+    }
+
+    if (by_layout < by_fat) {
+        return by_layout;
+    }
+
+    return by_fat;
+}
+
 static uint32_t read_fat_entry(uint32_t cluster) {
     uint8_t sector[BLOCKDEV_SECTOR_SIZE];
     uint32_t fat_offset = cluster * 4U;
     uint32_t sector_offset = fat_offset / BLOCKDEV_SECTOR_SIZE;
     uint32_t entry_offset = fat_offset % BLOCKDEV_SECTOR_SIZE;
 
-    if (blockdev_read_sector(fs.fat_start_sector + sector_offset, sector) != 0) {
-        ERROR_LOG("failed to read FAT sector");
-        return 0x0FFFFFFFU;
+    if (cluster >= fat_entry_capacity()) {
+        return FAT32_CLUSTER_EOC;
     }
 
-    return read_u32le(&sector[entry_offset]) & 0x0FFFFFFFU;
+    if (blockdev_read_sector(fs.fat_start_sector + sector_offset, sector) != 0) {
+        ERROR_LOG("failed to read FAT sector");
+        return FAT32_CLUSTER_EOC;
+    }
+
+    return read_u32le(&sector[entry_offset]) & FAT32_CLUSTER_EOC;
 }
 
 static int write_fat_entry(uint32_t cluster, uint32_t value) {
@@ -120,11 +154,15 @@ static int write_fat_entry(uint32_t cluster, uint32_t value) {
     uint32_t sector_offset = fat_offset / BLOCKDEV_SECTOR_SIZE;
     uint32_t entry_offset = fat_offset % BLOCKDEV_SECTOR_SIZE;
 
+    if (cluster >= fat_entry_capacity()) {
+        return -1;
+    }
+
     if (blockdev_read_sector(fs.fat_start_sector + sector_offset, sector) != 0) {
         return -1;
     }
 
-    write_u32le(&sector[entry_offset], value & 0x0FFFFFFFU);
+    write_u32le(&sector[entry_offset], value & FAT32_CLUSTER_EOC);
 
     if (blockdev_write_sector(fs.fat_start_sector + sector_offset, sector) != 0) {
         return -1;
@@ -247,7 +285,124 @@ static int next_path_component(const char** cursor, char* out_component, int out
 static uint32_t max_cluster_index(void) {
     uint32_t data_sectors = fs.total_sectors - fs.data_start_sector;
     uint32_t clusters = data_sectors / (uint32_t)fs.sectors_per_cluster;
-    return 2U + clusters;
+    return clamp_cluster_limit(2U + clusters);
+}
+
+static int read_cluster_bytes(uint32_t cluster, uint32_t offset, uint8_t* out, uint32_t size) {
+    uint8_t sector[BLOCKDEV_SECTOR_SIZE];
+    uint32_t bytes = cluster_bytes();
+    uint32_t local_offset = offset;
+    uint32_t copied = 0;
+
+    if (!is_data_cluster(cluster) || out == NULL || size == 0U || local_offset + size > bytes) {
+        return -1;
+    }
+
+    while (copied < size) {
+        uint32_t sector_index = local_offset / BLOCKDEV_SECTOR_SIZE;
+        uint32_t sector_offset = local_offset % BLOCKDEV_SECTOR_SIZE;
+        uint32_t chunk = BLOCKDEV_SECTOR_SIZE - sector_offset;
+        if (chunk > (size - copied)) {
+            chunk = size - copied;
+        }
+
+        if (blockdev_read_sector(cluster_to_sector(cluster) + sector_index, sector) != 0) {
+            return -1;
+        }
+
+        memory_copy(&out[copied], &sector[sector_offset], chunk);
+        copied += chunk;
+        local_offset += chunk;
+    }
+
+    return 0;
+}
+
+static int write_cluster_bytes(uint32_t cluster, uint32_t offset, const uint8_t* data, uint32_t size) {
+    uint8_t sector[BLOCKDEV_SECTOR_SIZE];
+    uint32_t bytes = cluster_bytes();
+    uint32_t local_offset = offset;
+    uint32_t copied = 0;
+
+    if (!is_data_cluster(cluster) || data == NULL || size == 0U || local_offset + size > bytes) {
+        return -1;
+    }
+
+    while (copied < size) {
+        uint32_t sector_index = local_offset / BLOCKDEV_SECTOR_SIZE;
+        uint32_t sector_offset = local_offset % BLOCKDEV_SECTOR_SIZE;
+        uint32_t chunk = BLOCKDEV_SECTOR_SIZE - sector_offset;
+        if (chunk > (size - copied)) {
+            chunk = size - copied;
+        }
+
+        if (blockdev_read_sector(cluster_to_sector(cluster) + sector_index, sector) != 0) {
+            return -1;
+        }
+
+        memory_copy(&sector[sector_offset], &data[copied], chunk);
+
+        if (blockdev_write_sector(cluster_to_sector(cluster) + sector_index, sector) != 0) {
+            return -1;
+        }
+
+        copied += chunk;
+        local_offset += chunk;
+    }
+
+    return 0;
+}
+
+static int ensure_file_cluster_chain(uint32_t* inout_first_cluster, uint32_t required_clusters) {
+    uint32_t first = *inout_first_cluster;
+    uint32_t current;
+    uint32_t count;
+    uint32_t next;
+
+    if (required_clusters == 0U) {
+        return 0;
+    }
+
+    if (!is_data_cluster(first)) {
+        if (allocate_cluster(&first) != 0) {
+            return -1;
+        }
+    }
+
+    current = first;
+    count = 1U;
+
+    while (count < required_clusters) {
+        next = read_fat_entry(current);
+        if (!is_data_cluster(next)) {
+            uint32_t allocated;
+            if (allocate_cluster(&allocated) != 0) {
+                return -1;
+            }
+
+            if (write_fat_entry(current, allocated) != 0) {
+                return -1;
+            }
+
+            current = allocated;
+        } else {
+            current = next;
+        }
+
+        count++;
+    }
+
+    next = read_fat_entry(current);
+    if (write_fat_entry(current, FAT32_CLUSTER_EOC) != 0) {
+        return -1;
+    }
+
+    if (is_data_cluster(next) && free_cluster_chain(next) != 0) {
+        return -1;
+    }
+
+    *inout_first_cluster = first;
+    return 0;
 }
 
 static int clear_cluster(uint32_t cluster) {
@@ -290,7 +445,7 @@ static int free_cluster_chain(uint32_t start_cluster) {
     uint32_t cluster = start_cluster;
     uint32_t guard = 0;
 
-    while (cluster >= 2U && cluster < FAT32_CLUSTER_EOC) {
+    while (is_data_cluster(cluster)) {
         uint32_t next = read_fat_entry(cluster);
         if (write_fat_entry(cluster, FAT32_CLUSTER_FREE) != 0) {
             return -1;
@@ -665,23 +820,21 @@ int fat32_touch_file(const char* abs_path) {
 }
 
 int fat32_write_file(const char* abs_path, const char* data, uint32_t size, int append) {
-    uint32_t cluster_bytes;
+    uint32_t bytes_per_cluster;
+    uint32_t final_size;
+    uint32_t required_clusters;
     uint32_t parent;
     DirEntryRef ref;
     uint32_t free_sector = 0;
     uint32_t free_offset = 0;
     uint8_t leaf[11];
-    uint8_t sector[BLOCKDEV_SECTOR_SIZE];
     uint32_t original_size;
-    uint32_t cluster;
-    uint32_t write_offset = 0;
+    uint32_t first_cluster;
+    uint32_t write_cluster;
+    uint32_t write_offset;
+    uint32_t copied = 0;
 
-    if (!fs.mounted || data == NULL || resolve_parent_and_leaf(abs_path, &parent, leaf) != 0) {
-        return -1;
-    }
-
-    cluster_bytes = (uint32_t)fs.bytes_per_sector * (uint32_t)fs.sectors_per_cluster;
-    if (cluster_bytes != BLOCKDEV_SECTOR_SIZE) {
+    if (!fs.mounted || (size > 0U && data == NULL) || resolve_parent_and_leaf(abs_path, &parent, leaf) != 0) {
         return -1;
     }
 
@@ -700,53 +853,76 @@ int fat32_write_file(const char* abs_path, const char* data, uint32_t size, int 
     }
 
     original_size = read_u32le(&ref.entry[28]);
-    cluster = entry_cluster(ref.entry);
+    first_cluster = entry_cluster(ref.entry);
+    bytes_per_cluster = cluster_bytes();
+
+    if (append) {
+        if (size > (0xFFFFFFFFU - original_size)) {
+            return -1;
+        }
+
+        final_size = original_size + size;
+    } else {
+        final_size = size;
+    }
 
     if (!append) {
-        if (cluster >= 2U) {
-            if (free_cluster_chain(cluster) != 0) {
+        if (is_data_cluster(first_cluster)) {
+            if (free_cluster_chain(first_cluster) != 0) {
                 return -1;
             }
         }
 
-        cluster = 0;
+        first_cluster = 0;
         original_size = 0;
     }
 
-    if (append && original_size + size > cluster_bytes) {
+    if (final_size == 0U) {
+        set_entry_cluster(ref.entry, 0);
+        write_u32le(&ref.entry[28], 0);
+        return write_directory_entry(ref.sector, ref.offset, ref.entry);
+    }
+
+    required_clusters = (final_size + bytes_per_cluster - 1U) / bytes_per_cluster;
+    if (ensure_file_cluster_chain(&first_cluster, required_clusters) != 0) {
         return -1;
     }
 
-    if (!append && size > cluster_bytes) {
-        return -1;
+    write_cluster = first_cluster;
+    write_offset = append ? original_size : 0U;
+
+    while (write_offset >= bytes_per_cluster) {
+        write_cluster = read_fat_entry(write_cluster);
+        if (!is_data_cluster(write_cluster)) {
+            return -1;
+        }
+
+        write_offset -= bytes_per_cluster;
     }
 
-    if ((append && (original_size + size) > 0U) || (!append && size > 0U)) {
-        if (cluster < 2U) {
-            if (allocate_cluster(&cluster) != 0) {
+    while (copied < size) {
+        uint32_t chunk = bytes_per_cluster - write_offset;
+        if (chunk > (size - copied)) {
+            chunk = size - copied;
+        }
+
+        if (write_cluster_bytes(write_cluster, write_offset, (const uint8_t*)data + copied, chunk) != 0) {
+            return -1;
+        }
+
+        copied += chunk;
+        write_offset = 0U;
+
+        if (copied < size) {
+            write_cluster = read_fat_entry(write_cluster);
+            if (!is_data_cluster(write_cluster)) {
                 return -1;
             }
         }
-
-        if (blockdev_read_sector(cluster_to_sector(cluster), sector) != 0) {
-            return -1;
-        }
-
-        if (!append) {
-            memory_set(sector, 0, sizeof(sector));
-        } else {
-            write_offset = original_size;
-        }
-
-        memory_copy(&sector[write_offset], (const uint8_t*)data, size);
-
-        if (blockdev_write_sector(cluster_to_sector(cluster), sector) != 0) {
-            return -1;
-        }
     }
 
-    set_entry_cluster(ref.entry, cluster);
-    write_u32le(&ref.entry[28], append ? (original_size + size) : size);
+    set_entry_cluster(ref.entry, first_cluster);
+    write_u32le(&ref.entry[28], final_size);
     return write_directory_entry(ref.sector, ref.offset, ref.entry);
 }
 
@@ -755,7 +931,9 @@ int fat32_read_file(const char* abs_path, char* out, uint32_t out_capacity, uint
     DirEntryRef ref;
     uint32_t size;
     uint32_t cluster;
-    uint8_t sector[BLOCKDEV_SECTOR_SIZE];
+    uint32_t bytes_per_cluster;
+    uint32_t copied = 0;
+    uint32_t remaining;
     uint32_t free_sector = 0;
     uint32_t free_offset = 0;
     uint8_t leaf[11];
@@ -775,21 +953,44 @@ int fat32_read_file(const char* abs_path, char* out, uint32_t out_capacity, uint
     size = read_u32le(&ref.entry[28]);
     cluster = entry_cluster(ref.entry);
 
-    if (size + 1U > out_capacity || size > BLOCKDEV_SECTOR_SIZE) {
+    if (size >= out_capacity) {
         return -1;
     }
 
-    if (size == 0U || cluster < 2U) {
+    if (size == 0U) {
         out[0] = '\0';
         *out_size = 0;
         return 0;
     }
 
-    if (blockdev_read_sector(cluster_to_sector(cluster), sector) != 0) {
+    if (!is_data_cluster(cluster)) {
         return -1;
     }
 
-    memory_copy((uint8_t*)out, sector, size);
+    bytes_per_cluster = cluster_bytes();
+    remaining = size;
+
+    while (remaining > 0U) {
+        uint32_t chunk = bytes_per_cluster;
+        if (chunk > remaining) {
+            chunk = remaining;
+        }
+
+        if (read_cluster_bytes(cluster, 0U, (uint8_t*)out + copied, chunk) != 0) {
+            return -1;
+        }
+
+        copied += chunk;
+        remaining -= chunk;
+
+        if (remaining > 0U) {
+            cluster = read_fat_entry(cluster);
+            if (!is_data_cluster(cluster)) {
+                return -1;
+            }
+        }
+    }
+
     out[size] = '\0';
     *out_size = size;
     return 0;

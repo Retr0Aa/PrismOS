@@ -8,7 +8,7 @@ LDFLAGS=-m32 -T boot/linker.ld -ffreestanding -nostdlib -no-pie -Wl,--build-id=n
 BUILD=build
 ISO_DIR=$(BUILD)/isodir
 
-.PHONY: all run run-serial run-serial-log clean
+.PHONY: all run run-serial run-serial-log prismcc clean
 
 all: os.iso
 
@@ -57,6 +57,24 @@ fat32.o: src/filesystem/fat32/fat32.c src/filesystem/fat32/fat32.h src/filesyste
 vfs.o: src/filesystem/vfs.c src/filesystem/vfs.h src/filesystem/fat32/fat32.h | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -c src/filesystem/vfs.c -o $(BUILD)/vfs.o
 
+app_loader.o: src/apps/app_loader.c src/apps/app_loader.h src/apps/app_format.h src/filesystem/vfs.h | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c src/apps/app_loader.c -o $(BUILD)/app_loader.o
+
+app_runtime.o: src/apps/app_runtime.c src/apps/app_runtime.h src/apps/editor_app.h | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c src/apps/app_runtime.c -o $(BUILD)/app_runtime.o
+
+bytecode_vm.o: src/apps/bytecode_vm.c src/apps/bytecode_vm.h src/apps/app_format.h src/debug/log.h src/display/console.h | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c src/apps/bytecode_vm.c -o $(BUILD)/bytecode_vm.o
+
+prismcc_runtime.o: src/apps/prismcc_runtime.c src/apps/prismcc_runtime.h src/apps/app_format.h src/debug/log.h src/filesystem/vfs.h | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c src/apps/prismcc_runtime.c -o $(BUILD)/prismcc_runtime.o
+
+editor_app.o: src/apps/editor_app.c src/apps/editor_app.h src/display/console.h src/filesystem/vfs.h src/input/keyboard.h | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c src/apps/editor_app.c -o $(BUILD)/editor_app.o
+
+app_manager.o: src/apps/app_manager.c src/apps/app_manager.h src/apps/app_loader.h src/apps/app_runtime.h src/apps/app_format.h src/debug/log.h src/filesystem/vfs.h | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c src/apps/app_manager.c -o $(BUILD)/app_manager.o
+
 gdt.o: src/platform/gdt.c src/platform/gdt.h | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -c src/platform/gdt.c -o $(BUILD)/gdt.o
 
@@ -87,9 +105,13 @@ paging.o: src/memory/paging.c src/memory/paging.h src/memory/pmm.h src/platform/
 INTERRUPT_OBJS = $(BUILD)/gdt.o $(BUILD)/pic.o $(BUILD)/isr_stubs.o $(BUILD)/idt.o $(BUILD)/irq.o $(BUILD)/interrupts.o $(BUILD)/ringbuf.o
 MEMORY_OBJS = $(BUILD)/pmm.o $(BUILD)/paging.o
 FS_OBJS = $(BUILD)/blockdev.o $(BUILD)/fat32.o $(BUILD)/vfs.o
+APP_OBJS = $(BUILD)/app_loader.o $(BUILD)/app_runtime.o $(BUILD)/bytecode_vm.o $(BUILD)/prismcc_runtime.o $(BUILD)/editor_app.o $(BUILD)/app_manager.o
 
-kernel.elf: boot.o kernel.o console.o psf_font.o keyboard.o serial.o comport.o log.o shell.o command.o blockdev.o fat32.o vfs.o font_psf.o gdt.o pic.o isr_stubs.o idt.o irq.o interrupts.o ringbuf.o pmm.o paging.o boot/linker.ld
-	gcc $(LDFLAGS) $(BUILD)/boot.o $(BUILD)/kernel.o $(BUILD)/console.o $(BUILD)/psf_font.o $(BUILD)/keyboard.o $(BUILD)/serial.o $(BUILD)/comport.o $(BUILD)/log.o $(BUILD)/shell.o $(BUILD)/command.o $(FS_OBJS) $(BUILD)/font_psf.o $(INTERRUPT_OBJS) $(MEMORY_OBJS) -o $(BUILD)/kernel.elf
+kernel.elf: boot.o kernel.o console.o psf_font.o keyboard.o serial.o comport.o log.o shell.o command.o blockdev.o fat32.o vfs.o app_loader.o app_runtime.o bytecode_vm.o prismcc_runtime.o editor_app.o app_manager.o font_psf.o gdt.o pic.o isr_stubs.o idt.o irq.o interrupts.o ringbuf.o pmm.o paging.o boot/linker.ld
+	gcc $(LDFLAGS) $(BUILD)/boot.o $(BUILD)/kernel.o $(BUILD)/console.o $(BUILD)/psf_font.o $(BUILD)/keyboard.o $(BUILD)/serial.o $(BUILD)/comport.o $(BUILD)/log.o $(BUILD)/shell.o $(BUILD)/command.o $(FS_OBJS) $(APP_OBJS) $(BUILD)/font_psf.o $(INTERRUPT_OBJS) $(MEMORY_OBJS) -o $(BUILD)/kernel.elf
+
+prismcc: tools/prismcc.c src/apps/app_format.h | $(BUILD)
+	gcc -O2 -Wall -Wextra -Isrc tools/prismcc.c -o $(BUILD)/prismcc
 
 os.iso: kernel.elf boot/grub.cfg
 	mkdir -p $(ISO_DIR)/boot/grub

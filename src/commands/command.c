@@ -6,6 +6,8 @@
 #include "platform/io.h"
 #include "platform/system.h"
 #include "filesystem/vfs.h"
+#include "apps/app_manager.h"
+#include "apps/prismcc_runtime.h"
 
 #define COMMAND_PATH_CAPACITY 128
 #define COMMAND_TOKEN_CAPACITY 64
@@ -67,6 +69,9 @@ static void command_delete(const char* arguments);
 static void command_cat(const char* arguments);
 static void command_write(const char* arguments);
 static void command_append(const char* arguments);
+static void command_edit(const char* arguments);
+static void command_app_run(const char* arguments);
+static void command_cc(const char* arguments);
 
 static char command_cwd[COMMAND_PATH_CAPACITY] = "/";
 
@@ -150,6 +155,9 @@ static const Command commands[] = {
     {"cat", "print file contents", command_cat},
     {"write", "overwrite file with text", command_write},
     {"append", "append text to file", command_append},
+    {"edit", "open text editor application", command_edit},
+    {"app-run", "run app package path [args]", command_app_run},
+    {"cc", "compile subset C source to app", command_cc},
 };
 
 static const int command_count = (int)(sizeof(commands) / sizeof(commands[0]));
@@ -457,6 +465,84 @@ static void command_append(const char* arguments) {
     if (vfs_write_file(absolute, text, (uint32_t)string_length(text), 1) != 0) {
         console_writeln("append failed");
     }
+}
+
+static void command_edit(const char* arguments) {
+    char token[COMMAND_TOKEN_CAPACITY];
+    char absolute[COMMAND_PATH_CAPACITY];
+    const char* remainder = 0;
+
+    if (parse_token(arguments, token, sizeof(token), &remainder) != 0 || *remainder != '\0') {
+        console_writeln("Usage: edit <path>");
+        return;
+    }
+
+    if (resolve_to_absolute_path(token, absolute, sizeof(absolute)) != 0) {
+        console_writeln("Invalid path");
+        return;
+    }
+
+    if (app_manager_run_editor(absolute) != 0) {
+        console_writeln("editor failed");
+    }
+}
+
+static void command_app_run(const char* arguments) {
+    char token[COMMAND_TOKEN_CAPACITY];
+    char absolute[COMMAND_PATH_CAPACITY];
+    const char* remainder = 0;
+
+    if (parse_token(arguments, token, sizeof(token), &remainder) != 0) {
+        console_writeln("Usage: app-run <path> [args]");
+        return;
+    }
+
+    if (resolve_to_absolute_path(token, absolute, sizeof(absolute)) != 0) {
+        console_writeln("Invalid path");
+        return;
+    }
+
+    if (app_manager_run_path(absolute, remainder) != 0) {
+        console_writeln("app execution failed");
+    }
+}
+
+static void command_cc(const char* arguments) {
+    char input_token[COMMAND_TOKEN_CAPACITY];
+    char output_token[COMMAND_TOKEN_CAPACITY];
+    char input_absolute[COMMAND_PATH_CAPACITY];
+    char output_absolute[COMMAND_PATH_CAPACITY];
+    char error[96];
+    const char* remainder = 0;
+
+    if (parse_token(arguments, input_token, sizeof(input_token), &remainder) != 0) {
+        console_writeln("Usage: cc <input.c> <output.app>");
+        return;
+    }
+
+    if (parse_token(remainder, output_token, sizeof(output_token), &remainder) != 0 || *remainder != '\0') {
+        console_writeln("Usage: cc <input.c> <output.app>");
+        return;
+    }
+
+    if (resolve_to_absolute_path(input_token, input_absolute, sizeof(input_absolute)) != 0) {
+        console_writeln("Invalid input path");
+        return;
+    }
+
+    if (resolve_to_absolute_path(output_token, output_absolute, sizeof(output_absolute)) != 0) {
+        console_writeln("Invalid output path");
+        return;
+    }
+
+    if (prismcc_compile_file(input_absolute, output_absolute, error, sizeof(error)) != 0) {
+        console_write("cc failed: ");
+        console_writeln(error[0] == '\0' ? "compile error" : error);
+        return;
+    }
+
+    console_write("Compiled app: ");
+    console_writeln(output_absolute);
 }
 
 const char* command_get_cwd(void) {

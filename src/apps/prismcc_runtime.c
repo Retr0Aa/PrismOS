@@ -19,11 +19,19 @@ typedef enum {
     TOK_RETURN,
     TOK_PRINT,
     TOK_PRINT_INT,
+    TOK_PRINT_COLOR,
+    TOK_READ_TEXT,
+    TOK_PRINT_INPUT,
     TOK_INPUT_INT,
+    TOK_INPUT_LEN,
+    TOK_INPUT_EQ,
+    TOK_STRING_LEN,
+    TOK_STRING_EQ,
     TOK_IF,
     TOK_ELSE,
     TOK_WHILE,
     TOK_FOR,
+    TOK_STRING_TYPE,
     TOK_IDENTIFIER,
     TOK_NUMBER,
     TOK_STRING,
@@ -62,7 +70,13 @@ typedef struct {
 typedef struct {
     char name[32];
     uint8_t index;
+    uint8_t type;
 } Local;
+
+typedef enum {
+    LOCAL_TYPE_INT = 0,
+    LOCAL_TYPE_STRING = 1
+} LocalType;
 
 typedef struct {
     char name[32];
@@ -182,8 +196,40 @@ static TokenType keyword_type(const char* text) {
         return TOK_PRINT_INT;
     }
 
+    if (string_equals(text, "print_color")) {
+        return TOK_PRINT_COLOR;
+    }
+
+    if (string_equals(text, "read_text")) {
+        return TOK_READ_TEXT;
+    }
+
+    if (string_equals(text, "print_input")) {
+        return TOK_PRINT_INPUT;
+    }
+
     if (string_equals(text, "input_int")) {
         return TOK_INPUT_INT;
+    }
+
+    if (string_equals(text, "input_len")) {
+        return TOK_INPUT_LEN;
+    }
+
+    if (string_equals(text, "input_eq")) {
+        return TOK_INPUT_EQ;
+    }
+
+    if (string_equals(text, "string_len")) {
+        return TOK_STRING_LEN;
+    }
+
+    if (string_equals(text, "string_eq")) {
+        return TOK_STRING_EQ;
+    }
+
+    if (string_equals(text, "string")) {
+        return TOK_STRING_TYPE;
     }
 
     if (string_equals(text, "if")) {
@@ -460,7 +506,7 @@ static int find_local(PrismCompiler* compiler, const char* name) {
     return -1;
 }
 
-static int add_local(PrismCompiler* compiler, const char* name, uint8_t* out_index) {
+static int add_local(PrismCompiler* compiler, const char* name, LocalType type, uint8_t* out_index) {
     if (compiler->local_count >= PRISMCC_MAX_LOCALS) {
         compiler->error = "too many locals";
         return -1;
@@ -473,9 +519,14 @@ static int add_local(PrismCompiler* compiler, const char* name, uint8_t* out_ind
 
     copy_string(compiler->locals[compiler->local_count].name, name, sizeof(compiler->locals[compiler->local_count].name));
     compiler->locals[compiler->local_count].index = (uint8_t)compiler->local_count;
+    compiler->locals[compiler->local_count].type = (uint8_t)type;
     *out_index = (uint8_t)compiler->local_count;
     compiler->local_count++;
     return 0;
+}
+
+static uint32_t make_literal_string_descriptor(uint16_t offset, uint16_t length) {
+    return ((uint32_t)offset << 16) | (uint32_t)length;
 }
 
 static int find_function(PrismCompiler* compiler, const char* name) {
@@ -543,23 +594,23 @@ static int emit_call_by_name(PrismCompiler* compiler, const char* name, uint8_t 
 static int parse_expression(PrismCompiler* compiler);
 static int parse_statement(PrismCompiler* compiler, int* saw_return);
 
-static int parse_declaration(PrismCompiler* compiler, int expect_semicolon) {
+static int parse_declaration(PrismCompiler* compiler, LocalType type, TokenType type_token, const char* type_name, int expect_semicolon) {
     char name[PRISMCC_MAX_TOKEN_TEXT];
     uint8_t local_index;
 
-    if (expect(compiler, TOK_INT, "expected int") != 0) {
+    if (expect(compiler, type_token, "expected declaration type") != 0) {
         return -1;
     }
 
     if (!token_is_name(compiler->lexer.current.type)) {
-        compiler->error = "expected identifier after int";
+        compiler->error = type_name;
         return -1;
     }
 
     copy_string(name, compiler->lexer.current.text, sizeof(name));
     next_token(compiler);
 
-    if (add_local(compiler, name, &local_index) != 0) {
+    if (add_local(compiler, name, type, &local_index) != 0) {
         return -1;
     }
 
@@ -583,6 +634,14 @@ static int parse_declaration(PrismCompiler* compiler, int expect_semicolon) {
     }
 
     return 0;
+}
+
+static int parse_int_declaration(PrismCompiler* compiler, int expect_semicolon) {
+    return parse_declaration(compiler, LOCAL_TYPE_INT, TOK_INT, "expected identifier after int", expect_semicolon);
+}
+
+static int parse_string_declaration(PrismCompiler* compiler, int expect_semicolon) {
+    return parse_declaration(compiler, LOCAL_TYPE_STRING, TOK_STRING_TYPE, "expected identifier after string", expect_semicolon);
 }
 
 static int parse_call_after_name(PrismCompiler* compiler, const char* name, int discard_return) {
@@ -656,7 +715,15 @@ static int parse_for_clause_item(PrismCompiler* compiler, int allow_declaration)
             compiler->error = "for increment does not support declaration";
             return -1;
         }
-        return parse_declaration(compiler, 0);
+        return parse_int_declaration(compiler, 0);
+    }
+
+    if (compiler->lexer.current.type == TOK_STRING_TYPE) {
+        if (!allow_declaration) {
+            compiler->error = "for increment does not support declaration";
+            return -1;
+        }
+        return parse_string_declaration(compiler, 0);
     }
 
     if (token_is_name(compiler->lexer.current.type)) {
@@ -687,6 +754,129 @@ static int parse_for_clause_item(PrismCompiler* compiler, int allow_declaration)
 static int parse_primary(PrismCompiler* compiler) {
     Token token = compiler->lexer.current;
 
+    if (token.type == TOK_READ_TEXT) {
+        next_token(compiler);
+
+        if (expect(compiler, TOK_LPAREN, "expected '(' after read_text") != 0) {
+            return -1;
+        }
+
+        if (compiler->lexer.current.type != TOK_RPAREN) {
+            if (parse_expression(compiler) != 0) {
+                return -1;
+            }
+
+            if (emit_u8(compiler, BCVM_OP_PRINT_STR_VAL) != 0) {
+                return -1;
+            }
+        }
+
+        if (expect(compiler, TOK_RPAREN, "expected ')' after read_text") != 0) {
+            return -1;
+        }
+
+        return emit_u8(compiler, BCVM_OP_READ_TEXT);
+    }
+
+    if (token.type == TOK_INPUT_LEN) {
+        next_token(compiler);
+
+        if (expect(compiler, TOK_LPAREN, "expected '(' after input_len") != 0) {
+            return -1;
+        }
+
+        if (expect(compiler, TOK_RPAREN, "expected ')' after input_len") != 0) {
+            return -1;
+        }
+
+        return emit_u8(compiler, BCVM_OP_INPUT_LEN);
+    }
+
+    if (token.type == TOK_INPUT_EQ) {
+        Token str;
+        uint16_t offset;
+        uint16_t length;
+
+        next_token(compiler);
+
+        if (expect(compiler, TOK_LPAREN, "expected '(' after input_eq") != 0) {
+            return -1;
+        }
+
+        if (compiler->lexer.current.type != TOK_STRING) {
+            compiler->error = "input_eq requires string literal";
+            return -1;
+        }
+
+        str = compiler->lexer.current;
+        length = (uint16_t)string_length(str.text);
+        if (add_data(compiler, str.text, length, &offset) != 0) {
+            return -1;
+        }
+
+        next_token(compiler);
+
+        if (expect(compiler, TOK_RPAREN, "expected ')' after input_eq") != 0) {
+            return -1;
+        }
+
+        if (emit_u8(compiler, BCVM_OP_INPUT_EQ) != 0
+            || emit_u16(compiler, offset) != 0
+            || emit_u16(compiler, length) != 0) {
+            return -1;
+        }
+
+        return 0;
+    }
+
+    if (token.type == TOK_STRING_LEN) {
+        next_token(compiler);
+
+        if (expect(compiler, TOK_LPAREN, "expected '(' after string_len") != 0) {
+            return -1;
+        }
+
+        if (parse_expression(compiler) != 0) {
+            return -1;
+        }
+
+        if (expect(compiler, TOK_RPAREN, "expected ')' after string_len") != 0) {
+            return -1;
+        }
+
+        if (emit_u8(compiler, BCVM_OP_STR_LEN) != 0) {
+            return -1;
+        }
+
+        return 0;
+    }
+
+    if (token.type == TOK_STRING_EQ) {
+        next_token(compiler);
+
+        if (expect(compiler, TOK_LPAREN, "expected '(' after string_eq") != 0) {
+            return -1;
+        }
+
+        if (parse_expression(compiler) != 0) {
+            return -1;
+        }
+
+        if (expect(compiler, TOK_COMMA, "expected ',' in string_eq") != 0) {
+            return -1;
+        }
+
+        if (parse_expression(compiler) != 0) {
+            return -1;
+        }
+
+        if (expect(compiler, TOK_RPAREN, "expected ')' after string_eq") != 0) {
+            return -1;
+        }
+
+        return emit_u8(compiler, BCVM_OP_STR_EQ);
+    }
+
     if (token.type == TOK_INPUT_INT) {
         next_token(compiler);
 
@@ -708,6 +898,24 @@ static int parse_primary(PrismCompiler* compiler) {
 
         next_token(compiler);
         return compiler->error == 0 ? 0 : -1;
+    }
+
+    if (token.type == TOK_STRING) {
+        uint16_t offset;
+        uint16_t length = (uint16_t)string_length(token.text);
+        uint32_t descriptor;
+
+        if (add_data(compiler, token.text, length, &offset) != 0) {
+            return -1;
+        }
+
+        descriptor = make_literal_string_descriptor(offset, length);
+        if (emit_u8(compiler, BCVM_OP_PUSH_I32) != 0 || emit_u32(compiler, descriptor) != 0) {
+            return -1;
+        }
+
+        next_token(compiler);
+        return 0;
     }
 
     if (token_is_name(token.type)) {
@@ -1039,31 +1247,23 @@ static int parse_statement(PrismCompiler* compiler, int* saw_return) {
     }
 
     if (compiler->lexer.current.type == TOK_INT) {
-        return parse_declaration(compiler, 1);
+        return parse_int_declaration(compiler, 1);
+    }
+
+    if (compiler->lexer.current.type == TOK_STRING_TYPE) {
+        return parse_string_declaration(compiler, 1);
     }
 
     if (compiler->lexer.current.type == TOK_PRINT) {
-        Token str;
-        uint16_t offset;
-        uint16_t length;
-
         next_token(compiler);
         if (expect(compiler, TOK_LPAREN, "expected '(' after print") != 0) {
             return -1;
         }
 
-        if (compiler->lexer.current.type != TOK_STRING) {
-            compiler->error = "print requires string literal";
+        if (parse_expression(compiler) != 0) {
             return -1;
         }
 
-        str = compiler->lexer.current;
-        length = (uint16_t)string_length(str.text);
-        if (add_data(compiler, str.text, length, &offset) != 0) {
-            return -1;
-        }
-
-        next_token(compiler);
         if (expect(compiler, TOK_RPAREN, "expected ')' after print argument") != 0) {
             return -1;
         }
@@ -1072,7 +1272,7 @@ static int parse_statement(PrismCompiler* compiler, int* saw_return) {
             return -1;
         }
 
-        if (emit_u8(compiler, BCVM_OP_PRINT_STR) != 0 || emit_u16(compiler, offset) != 0 || emit_u16(compiler, length) != 0) {
+        if (emit_u8(compiler, BCVM_OP_PRINT_STR_VAL) != 0) {
             return -1;
         }
 
@@ -1098,6 +1298,73 @@ static int parse_statement(PrismCompiler* compiler, int* saw_return) {
         }
 
         if (emit_u8(compiler, BCVM_OP_PRINT_INT) != 0) {
+            return -1;
+        }
+
+        return emit_u8(compiler, BCVM_OP_PRINT_NL);
+    }
+
+    if (compiler->lexer.current.type == TOK_PRINT_COLOR) {
+        next_token(compiler);
+        if (expect(compiler, TOK_LPAREN, "expected '(' after print_color") != 0) {
+            return -1;
+        }
+
+        if (parse_expression(compiler) != 0) {
+            return -1;
+        }
+
+        if (expect(compiler, TOK_COMMA, "expected ',' after color expression") != 0) {
+            return -1;
+        }
+
+        if (parse_expression(compiler) != 0) {
+            return -1;
+        }
+
+        if (expect(compiler, TOK_RPAREN, "expected ')' after print_color arguments") != 0) {
+            return -1;
+        }
+
+        if (expect(compiler, TOK_SEMI, "expected ';' after print_color") != 0) {
+            return -1;
+        }
+
+        if (emit_u8(compiler, BCVM_OP_PRINT_COLOR_STR_VAL) != 0) {
+            return -1;
+        }
+
+        return emit_u8(compiler, BCVM_OP_PRINT_NL);
+    }
+
+    if (compiler->lexer.current.type == TOK_READ_TEXT) {
+        if (parse_expression(compiler) != 0) {
+            return -1;
+        }
+
+        if (expect(compiler, TOK_SEMI, "expected ';' after read_text") != 0) {
+            return -1;
+        }
+
+        return emit_u8(compiler, BCVM_OP_POP);
+    }
+
+    if (compiler->lexer.current.type == TOK_PRINT_INPUT) {
+        next_token(compiler);
+
+        if (expect(compiler, TOK_LPAREN, "expected '(' after print_input") != 0) {
+            return -1;
+        }
+
+        if (expect(compiler, TOK_RPAREN, "expected ')' after print_input") != 0) {
+            return -1;
+        }
+
+        if (expect(compiler, TOK_SEMI, "expected ';' after print_input") != 0) {
+            return -1;
+        }
+
+        if (emit_u8(compiler, BCVM_OP_PRINT_INPUT) != 0) {
             return -1;
         }
 
@@ -1169,8 +1436,14 @@ static int parse_function(PrismCompiler* compiler) {
     char function_name[PRISMCC_MAX_TOKEN_TEXT];
     uint8_t param_count = 0;
     int saw_return = 0;
+    TokenType return_type = compiler->lexer.current.type;
 
-    if (expect(compiler, TOK_INT, "expected int at function start") != 0) {
+    if (return_type != TOK_INT && return_type != TOK_STRING_TYPE) {
+        compiler->error = "expected int or string at function start";
+        return -1;
+    }
+
+    if (expect(compiler, return_type, "expected function return type") != 0) {
         return -1;
     }
 
@@ -1192,10 +1465,19 @@ static int parse_function(PrismCompiler* compiler) {
         while (1) {
             char param_name[PRISMCC_MAX_TOKEN_TEXT];
             uint8_t ignored_index;
+            LocalType param_type;
+            TokenType param_token = compiler->lexer.current.type;
 
-            if (expect(compiler, TOK_INT, "expected int parameter type") != 0) {
+            if (param_token != TOK_INT && param_token != TOK_STRING_TYPE) {
+                compiler->error = "expected int or string parameter type";
                 return -1;
             }
+
+            if (expect(compiler, param_token, "expected parameter type") != 0) {
+                return -1;
+            }
+
+            param_type = (param_token == TOK_STRING_TYPE) ? LOCAL_TYPE_STRING : LOCAL_TYPE_INT;
 
             if (!token_is_name(compiler->lexer.current.type)) {
                 compiler->error = "expected parameter name";
@@ -1205,7 +1487,7 @@ static int parse_function(PrismCompiler* compiler) {
             copy_string(param_name, compiler->lexer.current.text, sizeof(param_name));
             next_token(compiler);
 
-            if (add_local(compiler, param_name, &ignored_index) != 0) {
+            if (add_local(compiler, param_name, param_type, &ignored_index) != 0) {
                 return -1;
             }
 
@@ -1273,8 +1555,8 @@ static int resolve_call_patches(PrismCompiler* compiler) {
 
 static int parse_program(PrismCompiler* compiler) {
     while (compiler->lexer.current.type != TOK_EOF) {
-        if (compiler->lexer.current.type != TOK_INT) {
-            compiler->error = "top-level items must be int methods";
+        if (compiler->lexer.current.type != TOK_INT && compiler->lexer.current.type != TOK_STRING_TYPE) {
+            compiler->error = "top-level items must be int or string methods";
             return -1;
         }
 

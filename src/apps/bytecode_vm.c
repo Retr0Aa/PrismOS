@@ -9,6 +9,86 @@
 #define BCVM_LOCALS_MAX 64U
 #define BCVM_CALL_DEPTH_MAX 32U
 #define BCVM_MAX_STEPS 200000U
+#define BCVM_INPUT_MAX 127U
+#define BCVM_HEAP_STRING_MAX 64U
+#define BCVM_HEAP_STRING_BYTES 4096U
+
+static char vm_input_buffer[BCVM_INPUT_MAX + 1U];
+static uint16_t vm_input_length = 0;
+static char vm_heap_string_data[BCVM_HEAP_STRING_BYTES];
+static uint16_t vm_heap_string_offset[BCVM_HEAP_STRING_MAX];
+static uint16_t vm_heap_string_length[BCVM_HEAP_STRING_MAX];
+static uint8_t vm_heap_string_used[BCVM_HEAP_STRING_MAX];
+static uint16_t vm_heap_next_offset = 0;
+static uint8_t vm_heap_next_slot = 0;
+
+#define VM_STRING_DESC_HEAP_MASK 0x80000000U
+
+static uint32_t vm_make_heap_string_descriptor(uint8_t slot) {
+    return VM_STRING_DESC_HEAP_MASK | (uint32_t)slot;
+}
+
+static int vm_resolve_string_descriptor(uint32_t descriptor,
+    const uint8_t* data,
+    const bcvm_image_header_t* header,
+    const char** out_ptr,
+    uint16_t* out_length) {
+    if ((descriptor & VM_STRING_DESC_HEAP_MASK) != 0U) {
+        uint8_t slot = (uint8_t)(descriptor & 0xFFU);
+        if (slot >= BCVM_HEAP_STRING_MAX || vm_heap_string_used[slot] == 0U) {
+            return -1;
+        }
+
+        *out_ptr = &vm_heap_string_data[vm_heap_string_offset[slot]];
+        *out_length = vm_heap_string_length[slot];
+        return 0;
+    }
+
+    {
+        uint16_t offset = (uint16_t)((descriptor >> 16) & 0x7FFFU);
+        uint16_t length = (uint16_t)(descriptor & 0xFFFFU);
+        if ((uint32_t)offset + (uint32_t)length > header->data_size) {
+            return -1;
+        }
+
+        *out_ptr = (const char*)&data[offset];
+        *out_length = length;
+    }
+
+    return 0;
+}
+
+static int vm_store_heap_string(const char* source, uint16_t length, uint32_t* out_descriptor) {
+    uint8_t slot;
+
+    if (length > BCVM_HEAP_STRING_BYTES) {
+        return -1;
+    }
+
+    if (vm_heap_next_offset + length > BCVM_HEAP_STRING_BYTES) {
+        vm_heap_next_offset = 0;
+        for (uint32_t i = 0; i < BCVM_HEAP_STRING_MAX; i++) {
+            vm_heap_string_used[i] = 0U;
+        }
+    }
+
+    if (vm_heap_next_slot >= BCVM_HEAP_STRING_MAX) {
+        vm_heap_next_slot = 0;
+    }
+
+    slot = vm_heap_next_slot++;
+    vm_heap_string_offset[slot] = vm_heap_next_offset;
+    vm_heap_string_length[slot] = length;
+    vm_heap_string_used[slot] = 1U;
+
+    for (uint16_t i = 0; i < length; i++) {
+        vm_heap_string_data[vm_heap_next_offset + i] = source[i];
+    }
+
+    vm_heap_next_offset = (uint16_t)(vm_heap_next_offset + length);
+    *out_descriptor = vm_make_heap_string_descriptor(slot);
+    return 0;
+}
 
 static uint16_t read_u16le(const uint8_t* source) {
     return (uint16_t)(source[0] | ((uint16_t)source[1] << 8));
@@ -105,6 +185,42 @@ static int32_t vm_read_int(void) {
     }
 }
 
+static int vm_read_text(uint32_t* out_descriptor) {
+    vm_input_length = 0;
+    vm_input_buffer[0] = '\0';
+
+    while (1) {
+        KeyEvent event = keyboard_read_event();
+
+        if (event.type == KEY_EVENT_ENTER) {
+            console_write_char('\n');
+            vm_input_buffer[vm_input_length] = '\0';
+            return vm_store_heap_string(vm_input_buffer, vm_input_length, out_descriptor);
+        }
+
+        if (event.type == KEY_EVENT_BACKSPACE) {
+            if (vm_input_length > 0U) {
+                vm_input_length--;
+                vm_input_buffer[vm_input_length] = '\0';
+                vm_erase_last_echoed_char();
+            }
+            continue;
+        }
+
+        if (event.type != KEY_EVENT_CHARACTER) {
+            continue;
+        }
+
+        if (event.character >= ' ' && event.character <= '~') {
+            if (vm_input_length < BCVM_INPUT_MAX) {
+                vm_input_buffer[vm_input_length++] = event.character;
+                vm_input_buffer[vm_input_length] = '\0';
+                console_write_char(event.character);
+            }
+        }
+    }
+}
+
 static int vm_read_header(const uint8_t* image, uint32_t image_size, bcvm_image_header_t* out_header) {
     if (image == 0 || out_header == 0 || image_size < BCVM_IMAGE_HEADER_SIZE) {
         return -1;
@@ -149,6 +265,13 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
     uint32_t steps = 0;
 
     (void)args;
+    vm_input_length = 0;
+    vm_input_buffer[0] = '\0';
+    vm_heap_next_offset = 0;
+    vm_heap_next_slot = 0;
+    for (uint32_t i = 0; i < BCVM_HEAP_STRING_MAX; i++) {
+        vm_heap_string_used[i] = 0U;
+    }
 
     if (vm_read_header(image, image_size, &header) != 0) {
         ERROR_LOG("BCVM invalid image header");
@@ -413,6 +536,75 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
                 vm_write_int(stack[--sp]);
                 break;
             }
+            case BCVM_OP_PRINT_COLOR_STR: {
+                uint16_t offset;
+                uint16_t length;
+                int32_t color_value;
+
+                if (pc + 4U > header.code_size || sp == 0U) {
+                    ERROR_LOG("BCVM PRINT_COLOR_STR fault");
+                    return -1;
+                }
+
+                offset = read_u16le(&code[pc]);
+                length = read_u16le(&code[pc + 2U]);
+                pc += 4U;
+
+                if ((uint32_t)offset + (uint32_t)length > header.data_size) {
+                    return -1;
+                }
+
+                color_value = stack[--sp];
+                if (color_value < 0) {
+                    color_value = 0;
+                }
+
+                console_set_fg_color((VGA_Color)((uint32_t)color_value & 0x0FU));
+                for (uint32_t i = 0; i < (uint32_t)length; i++) {
+                    console_write_char((char)data[offset + i]);
+                }
+                console_set_fg_color(COLOR_WHITE);
+                break;
+            }
+            case BCVM_OP_PRINT_STR_VAL: {
+                const char* string_ptr;
+                uint16_t string_len;
+
+                if (sp == 0U) {
+                    return -1;
+                }
+
+                if (vm_resolve_string_descriptor((uint32_t)stack[--sp], data, &header, &string_ptr, &string_len) != 0) {
+                    return -1;
+                }
+
+                for (uint16_t i = 0; i < string_len; i++) {
+                    console_write_char(string_ptr[i]);
+                }
+                break;
+            }
+            case BCVM_OP_PRINT_COLOR_STR_VAL: {
+                const char* string_ptr;
+                uint16_t string_len;
+                int32_t color_value;
+
+                if (sp < 2U) {
+                    return -1;
+                }
+
+                color_value = stack[sp - 2U];
+                if (vm_resolve_string_descriptor((uint32_t)stack[sp - 1U], data, &header, &string_ptr, &string_len) != 0) {
+                    return -1;
+                }
+
+                sp -= 2U;
+                console_set_fg_color((VGA_Color)((uint32_t)color_value & 0x0FU));
+                for (uint16_t i = 0; i < string_len; i++) {
+                    console_write_char(string_ptr[i]);
+                }
+                console_set_fg_color(COLOR_WHITE);
+                break;
+            }
             case BCVM_OP_PRINT_NL:
                 console_write_char('\n');
                 break;
@@ -422,6 +614,112 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
                 }
                 stack[sp++] = vm_read_int();
                 break;
+            case BCVM_OP_READ_TEXT: {
+                uint32_t descriptor;
+                if (sp >= BCVM_STACK_MAX) {
+                    return -1;
+                }
+
+                if (vm_read_text(&descriptor) != 0) {
+                    return -1;
+                }
+
+                stack[sp++] = (int32_t)descriptor;
+                break;
+            }
+            case BCVM_OP_PRINT_INPUT:
+                for (uint16_t i = 0; i < vm_input_length; i++) {
+                    console_write_char(vm_input_buffer[i]);
+                }
+                break;
+            case BCVM_OP_INPUT_LEN:
+                if (sp >= BCVM_STACK_MAX) {
+                    return -1;
+                }
+                stack[sp++] = (int32_t)vm_input_length;
+                break;
+            case BCVM_OP_INPUT_EQ: {
+                uint16_t offset;
+                uint16_t length;
+                int32_t equal = 1;
+
+                if (pc + 4U > header.code_size || sp >= BCVM_STACK_MAX) {
+                    ERROR_LOG("BCVM INPUT_EQ fault");
+                    return -1;
+                }
+
+                offset = read_u16le(&code[pc]);
+                length = read_u16le(&code[pc + 2U]);
+                pc += 4U;
+
+                if ((uint32_t)offset + (uint32_t)length > header.data_size) {
+                    return -1;
+                }
+
+                if (length != vm_input_length) {
+                    equal = 0;
+                } else {
+                    for (uint16_t i = 0; i < length; i++) {
+                        if (vm_input_buffer[i] != (char)data[offset + i]) {
+                            equal = 0;
+                            break;
+                        }
+                    }
+                }
+
+                stack[sp++] = equal;
+                break;
+            }
+            case BCVM_OP_STR_LEN: {
+                const char* string_ptr;
+                uint16_t string_len;
+
+                if (sp == 0U) {
+                    return -1;
+                }
+
+                if (vm_resolve_string_descriptor((uint32_t)stack[sp - 1U], data, &header, &string_ptr, &string_len) != 0) {
+                    return -1;
+                }
+
+                (void)string_ptr;
+                stack[sp - 1U] = (int32_t)string_len;
+                break;
+            }
+            case BCVM_OP_STR_EQ: {
+                const char* lhs_ptr;
+                const char* rhs_ptr;
+                uint16_t lhs_len;
+                uint16_t rhs_len;
+                int32_t equal = 1;
+
+                if (sp < 2U) {
+                    return -1;
+                }
+
+                if (vm_resolve_string_descriptor((uint32_t)stack[sp - 2U], data, &header, &lhs_ptr, &lhs_len) != 0) {
+                    return -1;
+                }
+
+                if (vm_resolve_string_descriptor((uint32_t)stack[sp - 1U], data, &header, &rhs_ptr, &rhs_len) != 0) {
+                    return -1;
+                }
+
+                if (lhs_len != rhs_len) {
+                    equal = 0;
+                } else {
+                    for (uint16_t i = 0; i < lhs_len; i++) {
+                        if (lhs_ptr[i] != rhs_ptr[i]) {
+                            equal = 0;
+                            break;
+                        }
+                    }
+                }
+
+                sp -= 2U;
+                stack[sp++] = equal;
+                break;
+            }
             case BCVM_OP_POP:
                 if (sp == 0U) {
                     return -1;

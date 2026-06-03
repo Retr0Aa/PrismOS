@@ -3,6 +3,7 @@
 #include "apps/app_format.h"
 #include "debug/log.h"
 #include "display/console.h"
+#include "filesystem/vfs.h"
 #include "input/keyboard.h"
 
 #define BCVM_STACK_MAX 256U
@@ -12,6 +13,10 @@
 #define BCVM_INPUT_MAX 127U
 #define BCVM_HEAP_STRING_MAX 64U
 #define BCVM_HEAP_STRING_BYTES 4096U
+#define BCVM_HEAP_ARRAY_MAX 64U
+#define BCVM_HEAP_ARRAY_CELLS 1024U
+#define BCVM_FILE_PATH_MAX 128U
+#define BCVM_FILE_TEXT_MAX 2048U
 
 static char vm_input_buffer[BCVM_INPUT_MAX + 1U];
 static uint16_t vm_input_length = 0;
@@ -21,6 +26,14 @@ static uint16_t vm_heap_string_length[BCVM_HEAP_STRING_MAX];
 static uint8_t vm_heap_string_used[BCVM_HEAP_STRING_MAX];
 static uint16_t vm_heap_next_offset = 0;
 static uint8_t vm_heap_next_slot = 0;
+static int32_t vm_heap_array_data[BCVM_HEAP_ARRAY_CELLS];
+static uint16_t vm_heap_array_offset[BCVM_HEAP_ARRAY_MAX];
+static uint16_t vm_heap_array_length[BCVM_HEAP_ARRAY_MAX];
+static uint8_t vm_heap_array_used[BCVM_HEAP_ARRAY_MAX];
+static uint16_t vm_heap_array_next_offset = 0;
+static uint8_t vm_heap_array_next_slot = 0;
+static char vm_file_path_buffer[BCVM_FILE_PATH_MAX];
+static char vm_file_text_buffer[BCVM_FILE_TEXT_MAX + 1U];
 
 #define VM_STRING_DESC_HEAP_MASK 0x80000000U
 
@@ -87,6 +100,102 @@ static int vm_store_heap_string(const char* source, uint16_t length, uint32_t* o
 
     vm_heap_next_offset = (uint16_t)(vm_heap_next_offset + length);
     *out_descriptor = vm_make_heap_string_descriptor(slot);
+    return 0;
+}
+
+static int vm_copy_string_descriptor_to_buffer(uint32_t descriptor,
+    const uint8_t* data,
+    const bcvm_image_header_t* header,
+    char* out,
+    uint32_t out_capacity) {
+    const char* ptr;
+    uint16_t length;
+
+    if (out == 0 || out_capacity == 0U) {
+        return -1;
+    }
+
+    if (vm_resolve_string_descriptor(descriptor, data, header, &ptr, &length) != 0) {
+        return -1;
+    }
+
+    if ((uint32_t)length + 1U > out_capacity) {
+        return -1;
+    }
+
+    for (uint16_t i = 0; i < length; i++) {
+        out[i] = ptr[i];
+    }
+    out[length] = '\0';
+    return 0;
+}
+
+static int vm_create_array(uint16_t length, uint32_t* out_handle) {
+    uint8_t slot;
+
+    if (length == 0U || length > BCVM_HEAP_ARRAY_CELLS) {
+        return -1;
+    }
+
+    if ((uint32_t)vm_heap_array_next_offset + length > BCVM_HEAP_ARRAY_CELLS) {
+        vm_heap_array_next_offset = 0;
+        vm_heap_array_next_slot = 0;
+        for (uint32_t i = 0; i < BCVM_HEAP_ARRAY_MAX; i++) {
+            vm_heap_array_used[i] = 0U;
+        }
+    }
+
+    if (vm_heap_array_next_slot >= BCVM_HEAP_ARRAY_MAX) {
+        vm_heap_array_next_slot = 0;
+    }
+
+    slot = vm_heap_array_next_slot++;
+    vm_heap_array_offset[slot] = vm_heap_array_next_offset;
+    vm_heap_array_length[slot] = length;
+    vm_heap_array_used[slot] = 1U;
+
+    for (uint16_t i = 0; i < length; i++) {
+        vm_heap_array_data[vm_heap_array_next_offset + i] = 0;
+    }
+
+    vm_heap_array_next_offset = (uint16_t)(vm_heap_array_next_offset + length);
+    *out_handle = (uint32_t)slot;
+    return 0;
+}
+
+static int vm_get_array_value(uint32_t handle, int32_t index, int32_t* out_value) {
+    uint16_t offset;
+    uint16_t length;
+
+    if (handle >= BCVM_HEAP_ARRAY_MAX || vm_heap_array_used[handle] == 0U || index < 0) {
+        return -1;
+    }
+
+    offset = vm_heap_array_offset[handle];
+    length = vm_heap_array_length[handle];
+    if ((uint32_t)index >= length) {
+        return -1;
+    }
+
+    *out_value = vm_heap_array_data[offset + (uint16_t)index];
+    return 0;
+}
+
+static int vm_set_array_value(uint32_t handle, int32_t index, int32_t value) {
+    uint16_t offset;
+    uint16_t length;
+
+    if (handle >= BCVM_HEAP_ARRAY_MAX || vm_heap_array_used[handle] == 0U || index < 0) {
+        return -1;
+    }
+
+    offset = vm_heap_array_offset[handle];
+    length = vm_heap_array_length[handle];
+    if ((uint32_t)index >= length) {
+        return -1;
+    }
+
+    vm_heap_array_data[offset + (uint16_t)index] = value;
     return 0;
 }
 
@@ -269,8 +378,13 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
     vm_input_buffer[0] = '\0';
     vm_heap_next_offset = 0;
     vm_heap_next_slot = 0;
+    vm_heap_array_next_offset = 0;
+    vm_heap_array_next_slot = 0;
     for (uint32_t i = 0; i < BCVM_HEAP_STRING_MAX; i++) {
         vm_heap_string_used[i] = 0U;
+    }
+    for (uint32_t i = 0; i < BCVM_HEAP_ARRAY_MAX; i++) {
+        vm_heap_array_used[i] = 0U;
     }
 
     if (vm_read_header(image, image_size, &header) != 0) {
@@ -718,6 +832,178 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
 
                 sp -= 2U;
                 stack[sp++] = equal;
+                break;
+            }
+            case BCVM_OP_ARR_NEW: {
+                uint16_t length;
+                uint32_t handle;
+
+                if (pc + 2U > header.code_size || sp >= BCVM_STACK_MAX) {
+                    return -1;
+                }
+
+                length = read_u16le(&code[pc]);
+                pc += 2U;
+                if (vm_create_array(length, &handle) != 0) {
+                    return -1;
+                }
+
+                stack[sp++] = (int32_t)handle;
+                break;
+            }
+            case BCVM_OP_ARR_GET: {
+                int32_t index;
+                int32_t value;
+                uint32_t handle;
+
+                if (sp < 2U) {
+                    return -1;
+                }
+
+                index = stack[--sp];
+                handle = (uint32_t)stack[--sp];
+                if (vm_get_array_value(handle, index, &value) != 0) {
+                    return -1;
+                }
+
+                stack[sp++] = value;
+                break;
+            }
+            case BCVM_OP_ARR_SET: {
+                int32_t index;
+                int32_t value;
+                uint32_t handle;
+
+                if (sp < 3U) {
+                    return -1;
+                }
+
+                value = stack[--sp];
+                index = stack[--sp];
+                handle = (uint32_t)stack[--sp];
+                if (vm_set_array_value(handle, index, value) != 0) {
+                    return -1;
+                }
+                break;
+            }
+            case BCVM_OP_FILE_READ: {
+                uint32_t path_desc;
+                uint32_t size = 0;
+                uint32_t text_desc;
+
+                if (sp < 1U) {
+                    return -1;
+                }
+
+                path_desc = (uint32_t)stack[--sp];
+                if (vm_copy_string_descriptor_to_buffer(path_desc,
+                        data,
+                        &header,
+                        vm_file_path_buffer,
+                        sizeof(vm_file_path_buffer)) != 0) {
+                    return -1;
+                }
+
+                if (vfs_read_file(vm_file_path_buffer,
+                        vm_file_text_buffer,
+                        BCVM_FILE_TEXT_MAX,
+                        &size) != 0) {
+                    return -1;
+                }
+
+                if (size > BCVM_FILE_TEXT_MAX) {
+                    return -1;
+                }
+
+                vm_file_text_buffer[size] = '\0';
+                if (vm_store_heap_string(vm_file_text_buffer, (uint16_t)size, &text_desc) != 0) {
+                    return -1;
+                }
+
+                if (sp >= BCVM_STACK_MAX) {
+                    return -1;
+                }
+
+                stack[sp++] = (int32_t)text_desc;
+                break;
+            }
+            case BCVM_OP_FILE_WRITE: {
+                uint32_t path_desc;
+                uint32_t text_desc;
+                const char* text_ptr;
+                uint16_t text_len;
+                int32_t status = -1;
+
+                if (sp < 2U || sp >= BCVM_STACK_MAX) {
+                    return -1;
+                }
+
+                text_desc = (uint32_t)stack[--sp];
+                path_desc = (uint32_t)stack[--sp];
+
+                if (vm_copy_string_descriptor_to_buffer(path_desc,
+                        data,
+                        &header,
+                        vm_file_path_buffer,
+                        sizeof(vm_file_path_buffer)) == 0
+                    && vm_resolve_string_descriptor(text_desc, data, &header, &text_ptr, &text_len) == 0) {
+                    if (vfs_write_file(vm_file_path_buffer, text_ptr, text_len, 0) == 0) {
+                        status = 0;
+                    }
+                }
+
+                stack[sp++] = status;
+                break;
+            }
+            case BCVM_OP_FILE_APPEND: {
+                uint32_t path_desc;
+                uint32_t text_desc;
+                const char* text_ptr;
+                uint16_t text_len;
+                int32_t status = -1;
+
+                if (sp < 2U || sp >= BCVM_STACK_MAX) {
+                    return -1;
+                }
+
+                text_desc = (uint32_t)stack[--sp];
+                path_desc = (uint32_t)stack[--sp];
+
+                if (vm_copy_string_descriptor_to_buffer(path_desc,
+                        data,
+                        &header,
+                        vm_file_path_buffer,
+                        sizeof(vm_file_path_buffer)) == 0
+                    && vm_resolve_string_descriptor(text_desc, data, &header, &text_ptr, &text_len) == 0) {
+                    if (vfs_write_file(vm_file_path_buffer, text_ptr, text_len, 1) == 0) {
+                        status = 0;
+                    }
+                }
+
+                stack[sp++] = status;
+                break;
+            }
+            case BCVM_OP_FILE_EXISTS: {
+                uint32_t path_desc;
+                int is_dir = 0;
+                int32_t exists = 0;
+
+                if (sp < 1U || sp >= BCVM_STACK_MAX) {
+                    return -1;
+                }
+
+                path_desc = (uint32_t)stack[--sp];
+                if (vm_copy_string_descriptor_to_buffer(path_desc,
+                        data,
+                        &header,
+                        vm_file_path_buffer,
+                        sizeof(vm_file_path_buffer)) == 0) {
+                    if (vfs_path_is_dir(vm_file_path_buffer, &is_dir) == 0) {
+                        exists = 1;
+                    }
+                }
+
+                stack[sp++] = exists;
                 break;
             }
             case BCVM_OP_POP:

@@ -12,6 +12,7 @@
 #define COMMAND_PATH_CAPACITY 128
 #define COMMAND_TOKEN_CAPACITY 64
 #define COMMAND_TEXT_CAPACITY 512
+#define COMMAND_MOVE_BUFFER_CAPACITY 4096
 
 typedef void (*CommandHandler)(const char* arguments);
 
@@ -72,6 +73,7 @@ static void command_append(const char* arguments);
 static void command_edit(const char* arguments);
 static void command_app_run(const char* arguments);
 static void command_cc(const char* arguments);
+static void command_mv(const char* arguments);
 
 static char command_cwd[COMMAND_PATH_CAPACITY] = "/";
 
@@ -155,6 +157,7 @@ static const Command commands[] = {
     {"cat", "print file contents", command_cat},
     {"write", "overwrite file with text", command_write},
     {"append", "append text to file", command_append},
+    {"mv", "move file from source path to destination path", command_mv},
     {"edit", "open text editor application", command_edit},
     {"app-run", "run app package path [args]", command_app_run},
     {"cc", "compile subset C source to app", command_cc},
@@ -464,6 +467,69 @@ static void command_append(const char* arguments) {
 
     if (vfs_write_file(absolute, text, (uint32_t)string_length(text), 1) != 0) {
         console_writeln("append failed");
+    }
+}
+
+static void command_mv(const char* arguments) {
+    char src_token[COMMAND_TOKEN_CAPACITY];
+    char dst_token[COMMAND_TOKEN_CAPACITY];
+    char src_absolute[COMMAND_PATH_CAPACITY];
+    char dst_absolute[COMMAND_PATH_CAPACITY];
+    char content[COMMAND_MOVE_BUFFER_CAPACITY + 1U];
+    uint32_t size = 0;
+    const char* remainder = 0;
+    int src_is_dir = 0;
+    int dst_is_dir = 0;
+
+    if (parse_token(arguments, src_token, sizeof(src_token), &remainder) != 0) {
+        console_writeln("Usage: mv <source> <destination>");
+        return;
+    }
+
+    if (parse_token(remainder, dst_token, sizeof(dst_token), &remainder) != 0 || *remainder != '\0') {
+        console_writeln("Usage: mv <source> <destination>");
+        return;
+    }
+
+    if (resolve_to_absolute_path(src_token, src_absolute, sizeof(src_absolute)) != 0
+        || resolve_to_absolute_path(dst_token, dst_absolute, sizeof(dst_absolute)) != 0) {
+        console_writeln("Invalid path");
+        return;
+    }
+
+    if (string_equals(src_absolute, dst_absolute)) {
+        console_writeln("mv skipped: source and destination are the same");
+        return;
+    }
+
+    if (vfs_path_is_dir(src_absolute, &src_is_dir) != 0) {
+        console_writeln("mv failed: source path not found");
+        return;
+    }
+
+    if (src_is_dir) {
+        console_writeln("mv failed: directory move not supported yet");
+        return;
+    }
+
+    if (vfs_path_is_dir(dst_absolute, &dst_is_dir) == 0 && dst_is_dir) {
+        console_writeln("mv failed: destination is a directory");
+        return;
+    }
+
+    if (vfs_read_file(src_absolute, content, sizeof(content), &size) != 0) {
+        console_writeln("mv failed: cannot read source file (file may be too large)");
+        return;
+    }
+
+    if (vfs_write_file(dst_absolute, content, size, 0) != 0) {
+        console_writeln("mv failed: cannot write destination file");
+        return;
+    }
+
+    if (vfs_rm(src_absolute) != 0) {
+        console_writeln("mv warning: copied but failed to remove source");
+        return;
     }
 }
 

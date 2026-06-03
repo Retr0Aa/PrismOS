@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PrismCC Reference</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>PrismCC Reference</h1>
+    <p>Feature overview for the in-OS subset C compiler and BCVM runtime</p>
+  </header>
+
+  <nav>
+    <a href="index.html">Home</a>
+    <a href="#overview">Overview</a>
+    <a href="#api-reference">API Reference</a>
+    <a href="#limits">Limits</a>
+    <a href="#workflow">Workflow</a>
+  </nav>
+
+  <div class="container">
+    <div class="card" id="overview">
+      <h2>Overview</h2>
+      <ul>
+        <li>Compiler: <code>src/apps/prismcc_runtime.c</code></li>
+        <li>VM runtime: <code>src/apps/bytecode_vm.c</code></li>
+        <li>Bytecode format/opcodes: <code>src/apps/app_format.h</code></li>
+        <li>Shell command: <code>cc &lt;input.c&gt; &lt;output.app&gt;</code></li>
+      </ul>
+      <p class="note">PrismCC compiles a C-like subset into BCVM bytecode packaged in the Prism app format.</p>
+    </div>
+
+    <div class="card">
+      <h2>Supported Types</h2>
+      <ul>
+        <li><code>int</code></li>
+        <li><code>string</code></li>
+        <li><code>int[N]</code> fixed-size arrays</li>
+      </ul>
+      <p class="note">Arrays are currently int-only. Local variable limit per function: 64.</p>
+    </div>
+
+    <div class="card">
+      <h2>Functions and Calls</h2>
+      <ul>
+        <li>User-defined functions</li>
+        <li>Function parameters of type <code>int</code> and <code>string</code></li>
+        <li>Return values</li>
+        <li>Overloads by name and parameter type list</li>
+        <li>Overload resolution during compile and patch stages</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>Statements and Control Flow</h2>
+      <ul>
+        <li>Variable declarations: <code>int x;</code>, <code>int x = 5;</code>, <code>string s;</code>, <code>string s = "hi";</code>, <code>int a[8];</code></li>
+        <li>Scalar assignment and array element assignment</li>
+        <li><code>if</code> / <code>else</code></li>
+        <li><code>while</code></li>
+        <li><code>for (init; condition; increment)</code></li>
+        <li><code>return expr;</code></li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>Expressions and Operators</h2>
+      <ul>
+        <li>Integer arithmetic: <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>, unary <code>-</code></li>
+        <li>Comparisons: <code>==</code>, <code>!=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code></li>
+        <li>Function call expressions</li>
+        <li>Parenthesized expressions</li>
+        <li>String literals</li>
+        <li>Array element reads</li>
+      </ul>
+    </div>
+
+    <div class="card" id="api-reference">
+      <h2>API Reference</h2>
+      <p class="note">These are the built-ins exposed by PrismCC. Each one below includes what it does and how to call it.</p>
+
+      <div class="api-item">
+        <h3 class="api-title"><code>print(expr)</code></h3>
+        <p class="api-meta">Prints a value and appends a newline. The argument can be <code>int</code> or <code>string</code>.</p>
+        <p>Use this when you want one call that handles either numeric or text output without choosing a separate function.</p>
+        <div class="api-example"><code>print("hello");
+print(42);</code></div>
+      </div>
+
+      <div class="api-item">
+        <h3 class="api-title"><code>print_int(expr)</code></h3>
+        <p class="api-meta">Prints an integer value and appends a newline.</p>
+        <p>Use this when the value is definitely numeric and you want the output path to be explicit.</p>
+        <div class="api-example"><code>int count = 3;
+print_int(count);</code></div>
+      </div>
+
+      <div class="api-item">
+        <h3 class="api-title"><code>print_color(colorExpr, stringExpr)</code></h3>
+        <p class="api-meta">Prints a string using a console color selected by the first argument.</p>
+        <p>Use this for highlighted status output or simple visual emphasis in terminal-style apps.</p>
+        <div class="api-example"><code>print_color(2, "success");</code></div>
+      </div>
+
+      <div class="api-item">
+        <h3 class="api-title"><code>read_text()</code></h3>
+        <p class="api-meta">Reads a text line from input and returns it as a string value.</p>
+        <p>Use this when you want to prompt through the shell or UI before collecting free-form text.</p>
+        <div class="api-example"><code>string name = read_text();</code></div>
+      </div>
+
+      <div class="api-item">
+        <h3 class="api-title"><code>read_text(promptStringExpr)</code></h3>
+        <p class="api-meta">Shows a prompt string, then reads a line of text and returns it.</p>
+        <p>Use this when the user should see the question or context before entering input.</p>
+        <div class="api-example"><code>string city = read_text("Enter city: ");</code></div>
+      </div>
+
+      <div class="api-item">
+        <h3 class="api-title"><code>input_int()</code></h3>
+        <p class="api-meta">Reads the current input buffer as an integer value.</p>
+        <p>Use this when the app expects a numeric response instead of raw text.</p>
+        <div class="api-example"><code>int age = input_int();</code></div>
+      </div>
+
+      <div class="api-item">
+        <h3 class="api-title"><code>print_input()</code></h3>
+        <p class="api-meta">Prints the current input buffer back to the console.</p>
+        <p>Use this for echoing the user’s last input or debugging interactive flows.</p>
+        <div class="api-example"><code>print_input();</code></div>
+      </div>
+
+      <div class="api-item">
+        <h3 class="api-title"><code>input_len()</code></h3>
+        <p class="api-meta">Returns the length of the current input buffer as an integer.</p>
+        <p>Use this when you need to check whether the input is empty or to size follow-up logic.</p>
+        <div class="api-example"><code>int len = input_len();</code></div>
+      </div>
+
+      <div class="api-item">
+        <h3 class="api-title"><code>input_eq("literal")</code></h3>
+        <p class="api-meta">Compares the current input buffer against a literal string and returns <code>1</code> or <code>0</code>.</p>
+        <p>Use this for menu choices, yes/no prompts, and simple command matching.</p>
+        <div class="api-example"><code>if (input_eq("yes")) {
+    print("confirmed");
+}</code></div>
+      </div>
+
+      <div class="api-item">
+        <h3 class="api-title"><code>string_len(stringExpr)</code></h3>
+        <p class="api-meta">Returns the length of a string as an integer.</p>
+        <p>Use this for bounds checks, validation, or any logic that depends on string size.</p>
+        <div class="api-example"><code>int size = string_len(name);</code></div>
+      </div>
+
+      <div class="api-item">
+        <h3 class="api-title"><code>string_eq(stringExprA, stringExprB)</code></h3>
+        <p class="api-meta">Compares two strings and returns <code>1</code> when they match, otherwise <code>0</code>.</p>
+        <p>Use this when you need exact string matching without manual character-by-character code.</p>
+        <div class="api-example"><code>if (string_eq(mode, "debug")) {
+    print("debug mode");
+}</code></div>
+      </div>
+
+      <div class="api-item">
+        <h3 class="api-title"><code>file_read(pathStringExpr)</code></h3>
+        <p class="api-meta">Reads a file and returns its contents as a string.</p>
+        <p>Use this when you want to load text data from the filesystem into a string value.</p>
+        <div class="api-example"><code>string data = file_read("/DATA.TXT");</code></div>
+      </div>
+
+      <div class="api-item">
+        <h3 class="api-title"><code>file_write(pathStringExpr, textStringExpr)</code></h3>
+        <p class="api-meta">Writes text to a file. In statement form, the status result is discarded.</p>
+        <p>Use this when you want to replace the file contents with a new string.</p>
+        <div class="api-example"><code>file_write("/OUT.TXT", "fresh contents");</code></div>
+      </div>
+
+      <div class="api-item">
+        <h3 class="api-title"><code>file_append(pathStringExpr, textStringExpr)</code></h3>
+        <p class="api-meta">Appends text to the end of a file. In statement form, the status result is discarded.</p>
+        <p>Use this for logs, traces, or any output that should accumulate over time.</p>
+        <div class="api-example"><code>file_append("/LOG.TXT", "next line");</code></div>
+      </div>
+
+      <div class="api-item">
+        <h3 class="api-title"><code>file_exists(pathStringExpr)</code></h3>
+        <p class="api-meta">Checks whether a file exists and returns <code>1</code> or <code>0</code>.</p>
+        <p>Use this before reading or writing when the app needs to branch on file presence.</p>
+        <div class="api-example"><code>if (file_exists("/CONFIG.TXT")) {
+    print("config found");
+}</code></div>
+      </div>
+
+      <p class="note">Path strings are passed directly to VFS operations in the VM.</p>
+    </div>
+
+    <div class="card">
+      <h2>Arrays</h2>
+      <ul>
+        <li>Fixed-size declaration with constant positive size</li>
+        <li>Zero-initialized when created</li>
+        <li>Indexed read and write</li>
+      </ul>
+      <p class="note">Array storage is VM heap backed, and out-of-range access fails VM execution.</p>
+    </div>
+
+    <div class="card" id="limits">
+      <h2>Compiler and Runtime Limits</h2>
+      <div class="two-col">
+        <div>
+          <h3>Compiler-side</h3>
+          <ul>
+            <li>Source size: 32 KiB</li>
+            <li>Code size: 48 KiB</li>
+            <li>Data size: 16 KiB</li>
+            <li>Max locals: 64</li>
+            <li>Max functions: 64</li>
+            <li>Max call patch sites: 256</li>
+          </ul>
+        </div>
+        <div>
+          <h3>VM-side</h3>
+          <ul>
+            <li>Stack entries: 256</li>
+            <li>Call depth: 32</li>
+            <li>Max VM steps per run: 200000</li>
+            <li>Input buffer: 127 chars</li>
+            <li>Heap string slots: 64</li>
+            <li>Heap array slots: 64</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="workflow">
+      <h2>Shell Workflow</h2>
+      <ol>
+        <li>Write a source file.</li>
+        <li>Compile in PrismOS shell with <code>cc /path/program.c /path/program.app</code>.</li>
+        <li>Run it with <code>app-run /path/program.app</code>.</li>
+      </ol>
+      <div class="api-item">
+        <h3 class="api-title"><code>cc &lt;input.c&gt; &lt;output.app&gt;</code></h3>
+        <p class="api-meta">Compiles a PrismCC source file into a Prism app package.</p>
+        <p>Use this inside the PrismOS shell to turn source code into a runnable BCVM application.</p>
+        <div class="api-example"><code>cc /HELLO.C /HELLO.APP</code></div>
+      </div>
+      <div class="api-item">
+        <h3 class="api-title"><code>app-run &lt;output.app&gt;</code></h3>
+        <p class="api-meta">Launches a compiled Prism app on the VM.</p>
+        <p>Use this after compilation to execute the generated app package.</p>
+        <div class="api-example"><code>app-run /HELLO.APP</code></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Current Known Gaps</h2>
+      <ul>
+        <li>No structs, unions, or enums</li>
+        <li>No pointers</li>
+        <li>No floating-point types</li>
+        <li>No global variables</li>
+        <li>No module or import system</li>
+        <li>No dynamic array type beyond fixed <code>int[N]</code></li>
+        <li>No string interpolation or format library yet</li>
+        <li>Filesystem built-ins currently use simple status returns</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="footer">© 2026 PrismOS Project</div>
+</body>
+</html>

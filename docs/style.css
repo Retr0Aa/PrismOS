@@ -1,0 +1,157 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #0b0f1a;
+  color: #ffffff;
+}
+
+header {
+  padding: 40px;
+  text-align: center;
+  background: #10192c;
+  border-bottom: 1px solid #24324f;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 48px;
+}
+
+header p {
+  margin: 10px 0 0;
+  opacity: 0.8;
+}
+
+nav {
+  display: flex;
+  justify-content: center;
+  gap: 20px;
+  padding: 15px;
+  background: #111827;
+  border-bottom: 1px solid #24324f;
+}
+
+nav a {
+  color: #ffffff;
+  text-decoration: none;
+  padding: 8px 14px;
+  background: #1f2937;
+  border: 1px solid #334155;
+}
+
+nav a:hover {
+  background: #273244;
+}
+
+.container {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 40px;
+}
+
+.card {
+  background: #111827;
+  padding: 20px;
+  margin: 15px 0;
+  border: 1px solid #24324f;
+}
+
+.card h2 {
+  margin-top: 0;
+}
+
+.card ul,
+.card ol {
+  margin-top: 10px;
+  padding-left: 24px;
+}
+
+.card code,
+.inline-code {
+  font-family: "Courier New", monospace;
+  font-size: 0.95em;
+  background: #0f172a;
+  padding: 2px 6px;
+  border: 1px solid #334155;
+}
+
+.api-item {
+  padding: 16px 0;
+  border-top: 1px solid #24324f;
+}
+
+.api-item:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.api-title {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+}
+
+.api-meta {
+  margin: 0 0 10px;
+  color: #c9d4e8;
+}
+
+.api-example {
+  margin: 10px 0 0;
+  padding: 12px;
+  background: #0b1220;
+  border: 1px solid #24324f;
+  overflow-x: auto;
+}
+
+.api-example code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  display: block;
+  white-space: pre;
+}
+
+.note {
+  opacity: 0.85;
+}
+
+.two-col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 15px;
+}
+
+.footer {
+  text-align: center;
+  padding: 20px;
+  opacity: 0.6;
+  border-top: 1px solid #24324f;
+  background: #0f172a;
+}
+
+@media (max-width: 720px) {
+  header {
+    padding: 28px 20px;
+  }
+
+  header h1 {
+    font-size: 36px;
+  }
+
+  nav {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .container {
+    padding: 20px;
+  }
+
+  .two-col {
+    grid-template-columns: 1fr;
+  }
+}

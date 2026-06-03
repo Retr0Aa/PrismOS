@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PrismOS Docs</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>PrismOS Docs</h1>
+    <p>Reference material for PrismOS and the in-OS PrismCC compiler</p>
+  </header>
+
+  <nav>
+    <a href="#about">About</a>
+    <a href="prismcc.html">PrismCC Reference</a>
+    <a href="https://github.com/Retr0Aa/PrismOS" target="_blank" rel="noreferrer">GitHub</a>
+  </nav>
+
+  <div class="container">
+    <div class="card" id="about">
+      <h2>PrismCC</h2>
+      <p>
+        PrismCC is the in-OS subset C compiler that turns source files into BCVM bytecode
+        packaged as Prism app images.
+      </p>
+      <p>
+        Open the compiler reference for the supported language features, built-ins, limits,
+        and shell workflow.
+      </p>
+      <p>
+        <a href="prismcc.html">Open PrismCC Reference →</a>
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>What It Supports</h2>
+      <p>
+        Functions, overloads, <code>int</code> and <code>string</code> values, fixed-size
+        <code>int[N]</code> arrays, control flow, arithmetic, comparisons, string helpers,
+        console I/O, and file I/O.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>Shell Workflow</h2>
+      <p>
+        Compile with <code>cc &lt;input.c&gt; &lt;output.app&gt;</code> inside PrismOS, then run the
+        app with <code>app-run</code>.
+      </p>
+    </div>
+  </div>
+
+  <div class="footer">© 2026 PrismOS Project</div>
+</body>
+</html>

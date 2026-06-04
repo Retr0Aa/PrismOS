@@ -16,6 +16,7 @@ PrismCC compiles a C-like subset into BCVM bytecode packaged in the Prism app fo
 - `int`
 - `string`
 - `int[N]` fixed-size arrays
+- `struct` types with `int`/`string` fields
 
 Notes:
 - Arrays are currently int-only.
@@ -32,6 +33,16 @@ Notes:
   - different parameter type list
 - Overload resolution is performed during compile/patch stage.
 
+## Preprocessor and Includes
+
+- Supports textual includes via:
+  - `#include "relative/path.h"`
+  - `#include <relative/or/absolute/path.h>`
+- Include paths are resolved relative to the including file when not absolute.
+- Header files (`.h`) are supported as normal include targets.
+- Includes are expanded before lexing/parsing (single translation unit).
+- Cyclic includes are rejected.
+
 ## Language: Statements and Control Flow
 
 - Variable declarations:
@@ -40,9 +51,11 @@ Notes:
   - `string s;`
   - `string s = "hi";`
   - `int a[8];`
+  - `struct Person p;`
 - Assignment:
   - scalar assignment (`x = expr;`)
   - array element assignment (`a[i] = expr;`)
+  - struct field assignment (`p.name = "neo";`, `p.age = 7;`)
 - `if` / `else`
 - `while`
 - `for (init; condition; increment)`
@@ -51,13 +64,26 @@ Notes:
 ## Language: Expressions and Operators
 
 - Integer arithmetic:
-  - `+`, `-`, `*`, `/`, unary `-`
+  - `+`, `-`, `*`, `/`, `%`
+  - unary `+`, unary `-`
+  - `++a`, `--a`, `a++`, `a--` for `int` locals
 - Integer comparisons:
   - `==`, `!=`, `<`, `<=`, `>`, `>=`
 - Function call expressions
 - Parenthesized expressions
 - String literals
 - Array element reads (`a[i]`)
+- Struct field reads (`p.name`, `p.age`)
+
+## Structs
+
+- Type definition syntax:
+  - `struct Person { int age; string name; };`
+- Field types currently supported in structs:
+  - `int`
+  - `string`
+- Struct variables are value containers backed by VM heap arrays.
+- Struct initializers are not supported yet (declare first, then assign fields).
 
 ## Built-ins: Console and Input
 
@@ -122,18 +148,38 @@ VM-side limits:
 ## Shell Workflow
 
 1. Write source file (for example under `/examples`).
+  - You can split reusable code into headers and include them.
 2. Compile in PrismOS shell:
    - `cc /path/program.c /path/program.app`
 3. Run app:
    - `app-run /path/program.app`
 
+### Small Standard Library (Headers)
+
+The repository now includes a small header-only standard library under `/examples/std`:
+
+- `/examples/std/prism_string.h`
+  - `std_str_len`, `std_str_eq`, emptiness and length checks
+- `/examples/std/prism_math.h`
+  - arithmetic wrappers, `std_abs`, `std_min`, `std_max`, `std_clamp`, `std_pow2`
+- `/examples/std/prism_io.h`
+  - print/read helpers and filesystem wrappers
+
+Usage example:
+
+- `#include "std/prism_string.h"`
+- `#include "std/prism_math.h"`
+- `#include "std/prism_io.h"`
+
 ## Current Known Gaps
 
-- No structs/unions/enums
+- No unions/enums
 - No pointers
 - No floating-point types
 - No global variables
 - No module/import system
+- No separate object/link pipeline yet (includes are textual expansion)
 - No dynamic array type beyond fixed `int[N]`
+- No struct fields of type array or nested struct yet
 - No string interpolation/format library yet
 - Filesystem built-ins currently use simple status returns; richer error model is pending

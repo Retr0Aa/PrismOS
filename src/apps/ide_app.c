@@ -1,4 +1,5 @@
 #include "apps/ide_app.h"
+#include "apps/prismcc_runtime.h"
 
 #include <stdint.h>
 
@@ -10,11 +11,7 @@
 
 #define IDE_MAX_TEXT (16U * 1024U)
 #define IDE_MAX_PATH 128U
-
-typedef int bool;
-
-#define true 1
-#define false 0
+#define IDE_TAB_WIDTH 4U
 
 typedef struct {
     char path[IDE_MAX_PATH];
@@ -166,6 +163,88 @@ static void editor_insert(EditorState* state, char c) {
     state->modified = 1;
 }
 
+static void editor_insert_spaces(EditorState* state, uint32_t count) {
+    for (uint32_t i = 0; i < count; i++) {
+        editor_insert(state, ' ');
+    }
+}
+
+static uint32_t indentation_for_line(const EditorState* state, uint32_t line_start) {
+    uint32_t pos = line_start;
+    uint32_t indent = 0;
+
+    while (pos < state->length) {
+        char c = state->text[pos];
+        if (c == ' ') {
+            indent++;
+            pos++;
+            continue;
+        }
+
+        if (c == '\t') {
+            indent += IDE_TAB_WIDTH;
+            pos++;
+            continue;
+        }
+
+        break;
+    }
+
+    return indent;
+}
+
+static void editor_insert_tab(EditorState* state) {
+    uint32_t col = column_for_index(state, state->cursor);
+    uint32_t spaces = IDE_TAB_WIDTH - (col % IDE_TAB_WIDTH);
+
+    if (spaces == 0U) {
+        spaces = IDE_TAB_WIDTH;
+    }
+
+    editor_insert_spaces(state, spaces);
+}
+
+static void editor_insert_newline_with_indent(EditorState* state) {
+    uint32_t line_start = line_start_for_index(state, state->cursor);
+    uint32_t indent = indentation_for_line(state, line_start);
+    char prev_non_space = '\0';
+    char next_non_space = '\0';
+    uint32_t scan;
+
+    if (state->cursor > 0U) {
+        scan = state->cursor;
+        while (scan > line_start) {
+            char c = state->text[scan - 1U];
+            if (c != ' ' && c != '\t') {
+                prev_non_space = c;
+                break;
+            }
+            scan--;
+        }
+    }
+
+    scan = state->cursor;
+    while (scan < state->length && state->text[scan] != '\n') {
+        char c = state->text[scan];
+        if (c != ' ' && c != '\t') {
+            next_non_space = c;
+            break;
+        }
+        scan++;
+    }
+
+    if (prev_non_space == '{') {
+        indent += IDE_TAB_WIDTH;
+    }
+
+    if (next_non_space == '}' && indent >= IDE_TAB_WIDTH) {
+        indent -= IDE_TAB_WIDTH;
+    }
+
+    editor_insert(state, '\n');
+    editor_insert_spaces(state, indent);
+}
+
 static void editor_backspace(EditorState* state) {
     if (state->cursor == 0U || state->length == 0U) {
         return;
@@ -281,101 +360,246 @@ static void draw_status_bar(uint32_t rows, uint32_t cursor_row, uint32_t cursor_
 }
 
 const char* keywords[] = {
-    "int",
-    "char",
-    "void",
-    "for",
-    "while",
-    "if",
-    "else",
-    "return"
+    "auto", "break", "case", "char", "const", "continue", "default", "do",
+    "double", "else", "enum", "extern", "float", "for", "goto", "if",
+    "inline", "int", "long", "register", "restrict", "return", "short", "signed",
+    "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void",
+    "volatile", "while"
 };
 
-bool is_identifier_char(char c)
-{
+static const uint32_t keyword_count = sizeof(keywords) / sizeof(keywords[0]);
+
+static int is_identifier_char(char c) {
     return (c >= 'a' && c <= 'z') ||
            (c >= 'A' && c <= 'Z') ||
            (c >= '0' && c <= '9') ||
            c == '_';
 }
 
-bool is_keyword_at(const char* text, uint32_t pos, const char** keyword)
-{
-    for (uint32_t i = 0; i < 8; i++)
-    {
-        uint32_t len = strlen(keywords[i]);
+static int is_digit_char(char c) {
+    return c >= '0' && c <= '9';
+}
 
-        if (strncmp(&text[pos], keywords[i], len) == 0)
-        {
-            char before = (pos > 0) ? text[pos - 1] : ' ';
-            char after = text[pos + len];
+static int is_hex_char(char c) {
+    return is_digit_char(c)
+        || (c >= 'a' && c <= 'f')
+        || (c >= 'A' && c <= 'F')
+        || c == 'x'
+        || c == 'X';
+}
 
-            if (!is_identifier_char(before) &&
-                !is_identifier_char(after))
-            {
-                *keyword = keywords[i];
-                return true;
-            }
+static int is_space_char(char c) {
+    return c == ' ' || c == '\t';
+}
+
+static int is_keyword_span(const char* text, uint32_t start, uint32_t len) {
+    for (uint32_t i = 0; i < keyword_count; i++) {
+        uint32_t keyword_len = strlen(keywords[i]);
+
+        if (keyword_len == len && strncmp(&text[start], keywords[i], len) == 0) {
+            return 1;
         }
     }
 
-    return false;
+    return 0;
+}
+
+static void draw_span(const EditorState* state, uint32_t start, uint32_t end, uint32_t* io_col, uint32_t columns) {
+    uint32_t pos = start;
+
+    while (pos < end && *io_col < columns) {
+        console_write_char(state->text[pos]);
+        pos++;
+        (*io_col)++;
+    }
+}
+
+static uint32_t find_line_end(const EditorState* state, uint32_t start) {
+    uint32_t pos = start;
+
+    while (pos < state->length && state->text[pos] != '\n') {
+        pos++;
+    }
+
+    return pos;
+}
+
+static uint32_t consume_string_literal(const EditorState* state, uint32_t start, char quote) {
+    uint32_t pos = start + 1U;
+
+    while (pos < state->length && state->text[pos] != '\n') {
+        if (state->text[pos] == '\\' && (pos + 1U) < state->length) {
+            pos += 2U;
+            continue;
+        }
+
+        if (state->text[pos] == quote) {
+            pos++;
+            break;
+        }
+
+        pos++;
+    }
+
+    return pos;
 }
 
 static void draw_text_area(const EditorState* state, uint32_t columns, uint32_t rows) {
     uint32_t visible_rows = rows - 2U;
     uint32_t line_start = line_start_for_row(state, state->scroll_row);
+    int in_block_comment = 0;
 
     console_set_color(COLOR_LIGHT_GRAY, COLOR_BLACK);
 
     for (uint32_t r = 0; r < visible_rows; r++) {
         uint32_t pos = line_start;
+        uint32_t line_end = find_line_end(state, line_start);
         uint32_t row_y = r + 1U;
         uint32_t col = 0;
+        int seen_non_space = 0;
 
         console_clear_row((int)row_y);
         console_set_cursor(0, (int)row_y);
 
-        while (pos < state->length &&
-       state->text[pos] != '\n' &&
-       col < columns)
-{
-    char c = state->text[pos];
+        while (pos < line_end && col < columns) {
+            uint32_t token_start = pos;
+            uint32_t token_end;
+            char c = state->text[pos];
 
-    // only try keyword match at word start
-    int word_start =
-        (pos == 0U) ||
-        !is_identifier_char(state->text[pos - 1U]);
+            if (in_block_comment) {
+                console_set_color(COLOR_DARK_GRAY, COLOR_BLACK);
+                token_end = pos;
 
-    if (word_start)
-    {
-        const char* keyword = 0;
+                while (token_end < line_end) {
+                    if ((token_end + 1U) < line_end
+                        && state->text[token_end] == '*'
+                        && state->text[token_end + 1U] == '/') {
+                        token_end += 2U;
+                        in_block_comment = 0;
+                        break;
+                    }
+                    token_end++;
+                }
 
-        if (is_keyword_at(state->text, pos, &keyword))
-        {
-            uint32_t len = strlen(keyword);
-
-            console_set_color(COLOR_GREEN, COLOR_BLACK);
-
-            for (uint32_t i = 0; i < len && col < columns; i++)
-            {
-                console_write_char(keyword[i]);
-                col++;
+                draw_span(state, pos, token_end, &col, columns);
+                pos = token_end;
+                seen_non_space = 1;
+                continue;
             }
 
-            pos += len;
+            if (c == '/' && (pos + 1U) < line_end && state->text[pos + 1U] == '/') {
+                console_set_color(COLOR_DARK_GRAY, COLOR_BLACK);
+                draw_span(state, pos, line_end, &col, columns);
+                pos = line_end;
+                continue;
+            }
+
+            if (c == '/' && (pos + 1U) < line_end && state->text[pos + 1U] == '*') {
+                console_set_color(COLOR_DARK_GRAY, COLOR_BLACK);
+                token_end = pos + 2U;
+                in_block_comment = 1;
+
+                while (token_end < line_end) {
+                    if ((token_end + 1U) < line_end
+                        && state->text[token_end] == '*'
+                        && state->text[token_end + 1U] == '/') {
+                        token_end += 2U;
+                        in_block_comment = 0;
+                        break;
+                    }
+                    token_end++;
+                }
+
+                draw_span(state, pos, token_end, &col, columns);
+                pos = token_end;
+                seen_non_space = 1;
+                continue;
+            }
+
+            if (c == '"' || c == '\'') {
+                token_end = consume_string_literal(state, pos, c);
+                if (token_end > line_end) {
+                    token_end = line_end;
+                }
+
+                console_set_color(COLOR_YELLOW, COLOR_BLACK);
+                draw_span(state, token_start, token_end, &col, columns);
+                pos = token_end;
+                seen_non_space = 1;
+                continue;
+            }
+
+            if (c == '#' && !seen_non_space) {
+                console_set_color(COLOR_LIGHT_GREEN, COLOR_BLACK);
+                draw_span(state, pos, line_end, &col, columns);
+                pos = line_end;
+                seen_non_space = 1;
+                continue;
+            }
+
+            if (is_digit_char(c)) {
+                token_end = pos + 1U;
+                while (token_end < line_end && (is_hex_char(state->text[token_end])
+                    || state->text[token_end] == 'u'
+                    || state->text[token_end] == 'U'
+                    || state->text[token_end] == 'l'
+                    || state->text[token_end] == 'L'
+                    || state->text[token_end] == '.')) {
+                    token_end++;
+                }
+
+                console_set_color(COLOR_LIGHT_MAGENTA, COLOR_BLACK);
+                draw_span(state, token_start, token_end, &col, columns);
+                pos = token_end;
+                seen_non_space = 1;
+                continue;
+            }
+
+            if (is_identifier_char(c) && !is_digit_char(c)) {
+                token_end = pos + 1U;
+                while (token_end < line_end && is_identifier_char(state->text[token_end])) {
+                    token_end++;
+                }
+
+                if (is_keyword_span(state->text, token_start, token_end - token_start)) {
+                    console_set_color(COLOR_LIGHT_CYAN, COLOR_BLACK);
+                } else {
+                    console_set_color(COLOR_LIGHT_GRAY, COLOR_BLACK);
+                }
+
+                draw_span(state, token_start, token_end, &col, columns);
+                pos = token_end;
+                seen_non_space = 1;
+                continue;
+            }
+
+            if (c == '{' || c == '}' || c == '(' || c == ')' || c == '[' || c == ']') {
+                console_set_color(COLOR_LIGHT_BLUE, COLOR_BLACK);
+                console_write_char(c);
+                pos++;
+                col++;
+                seen_non_space = 1;
+                continue;
+            }
+
+            if (c == '+' || c == '-' || c == '*' || c == '/' || c == '=' || c == '%' || c == '!' || c == '&' || c == '|') {
+                console_set_color(COLOR_LIGHT_RED, COLOR_BLACK);
+                console_write_char(c);
+                pos++;
+                col++;
+                seen_non_space = 1;
+                continue;
+            }
 
             console_set_color(COLOR_LIGHT_GRAY, COLOR_BLACK);
-            continue;
+            console_write_char(c);
+            pos++;
+            col++;
+
+            if (!is_space_char(c)) {
+                seen_non_space = 1;
+            }
         }
-    }
-
-    console_set_color(COLOR_LIGHT_GRAY, COLOR_BLACK);
-    console_write_char(c);
-
-    pos++;
-    col++;
-}
 
         if (line_start >= state->length) {
             line_start = state->length;
@@ -399,7 +623,6 @@ static void draw_editor(EditorState* state, int text_dirty) {
     int scroll_changed;
     int layout_changed;
     int needs_full_text;
-    int update_started = 0;
 
     if (columns == 0U || rows < 3U) {
         return;
@@ -417,8 +640,6 @@ static void draw_editor(EditorState* state, int text_dirty) {
         || (state->prev_length != state->length);
 
     if (needs_full_text) {
-        console_begin_update();
-        update_started = 1;
         draw_title_bar(state);
         draw_text_area(state, columns, rows);
         state->full_redraw = 0;
@@ -444,9 +665,6 @@ static void draw_editor(EditorState* state, int text_dirty) {
         }
     }
 
-    if (update_started) {
-        console_end_update();
-    }
 }
 
 static int editor_save(EditorState* state) {
@@ -460,11 +678,83 @@ static int editor_save(EditorState* state) {
     return 0;
 }
 
+static void derive_output_path(const char* input_path, char* output_path, uint32_t capacity) {
+    uint32_t i = 0;
+    uint32_t last_slash = 0xFFFFFFFFU;
+    uint32_t last_dot = 0xFFFFFFFFU;
+
+    if (capacity == 0U) {
+        return;
+    }
+
+    while (input_path[i] != '\0' && i + 1U < capacity) {
+        if (input_path[i] == '/') {
+            last_slash = i;
+        }
+
+        if (input_path[i] == '.') {
+            last_dot = i;
+        }
+
+        i++;
+    }
+
+    if (last_dot != 0xFFFFFFFFU && last_dot > last_slash) {
+        i = 0;
+        while (i < last_dot && i + 1U < capacity) {
+            output_path[i] = input_path[i];
+            i++;
+        }
+        output_path[i] = '\0';
+
+        if (i + 4U < capacity) {
+            output_path[i++] = '.';
+            output_path[i++] = 'A';
+            output_path[i++] = 'P';
+            output_path[i++] = 'P';
+            output_path[i] = '\0';
+        }
+        return;
+    }
+
+    i = 0;
+    while (input_path[i] != '\0' && i + 1U < capacity) {
+        output_path[i] = input_path[i];
+        i++;
+    }
+
+    if (i + 4U < capacity) {
+        output_path[i++] = '.';
+        output_path[i++] = 'A';
+        output_path[i++] = 'P';
+        output_path[i++] = 'P';
+    }
+
+    output_path[i] = '\0';
+}
+
+static int editor_build(EditorState* state, char* output_path, uint32_t output_path_capacity, char* build_error, uint32_t build_error_capacity) {
+    if (state->modified && editor_save(state) != 0) {
+        if (build_error_capacity > 0U) {
+            copy_limited(build_error, build_error_capacity, "save failed before build");
+        }
+        return -1;
+    }
+
+    derive_output_path(state->path, output_path, output_path_capacity);
+
+    if (prismcc_compile_file(state->path, output_path, build_error, build_error_capacity) != 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
 static void draw_exit_menu(uint32_t rows) {
     console_set_color(COLOR_YELLOW, COLOR_DARK_GRAY);
     console_clear_row((int)(rows - 1U));
     console_set_cursor(0, (int)(rows - 1U));
-    console_write("Exit menu: R=run S=save+exit  Q=quit  C=cancel");
+    console_write("Exit menu: S=save+exit  B=build  Q=quit  C=cancel");
 }
 
 static void handle_exit_prompt(EditorState* state) {
@@ -506,13 +796,39 @@ static void handle_exit_prompt(EditorState* state) {
                 (void)keyboard_read_event();
                 return;
             }
+
+            if (c == 'b') {
+                char output_path[IDE_MAX_PATH];
+                char build_error[128];
+
+                if (editor_build(state, output_path, sizeof(output_path), build_error, sizeof(build_error)) == 0) {
+                    console_set_color(COLOR_LIGHT_GREEN, COLOR_BLACK);
+                    console_clear_row((int)(rows - 1U));
+                    console_set_cursor(0, (int)(rows - 1U));
+                    console_write("Build ok: ");
+                    console_write(output_path);
+                    console_write(". Press any key to continue editing.");
+                } else {
+                    console_set_color(COLOR_LIGHT_RED, COLOR_BLACK);
+                    console_clear_row((int)(rows - 1U));
+                    console_set_cursor(0, (int)(rows - 1U));
+                    console_write("Build failed: ");
+                    console_write(build_error[0] == '\0' ? "unknown error" : build_error);
+                    console_write(". Press any key to continue editing.");
+                }
+
+                (void)keyboard_read_event();
+                return;
+            }
         }
     }
 }
 
 int ide_app_run(const char* abs_path) {
-    EditorState state;
+    static EditorState state;
     uint32_t size = 0;
+
+    memset(&state, 0, sizeof(state));
 
     DEBUG_LOG("ide app launch requested");
 
@@ -564,10 +880,7 @@ int ide_app_run(const char* abs_path) {
                 state.full_redraw = 1;
                 text_dirty = 1;
             } else if (event.character == '\t') {
-                editor_insert(&state, ' ');
-                editor_insert(&state, ' ');
-                editor_insert(&state, ' ');
-                editor_insert(&state, ' ');
+                editor_insert_tab(&state);
                 state.preferred_col = column_for_index(&state, state.cursor);
                 text_dirty = 1;
             } else if (event.character >= 32 && event.character <= 126) {
@@ -580,7 +893,7 @@ int ide_app_run(const char* abs_path) {
 
         switch (event.type) {
             case KEY_EVENT_ENTER:
-                editor_insert(&state, '\n');
+                editor_insert_newline_with_indent(&state);
                 state.preferred_col = column_for_index(&state, state.cursor);
                 text_dirty = 1;
                 break;

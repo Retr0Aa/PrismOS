@@ -38,6 +38,7 @@
         <li><code>int</code></li>
         <li><code>string</code></li>
         <li><code>int[N]</code> fixed-size arrays</li>
+        <li><code>struct</code> types with <code>int</code>/<code>string</code> fields</li>
       </ul>
       <p class="note">Arrays are currently int-only. Local variable limit per function: 64.</p>
     </div>
@@ -54,10 +55,22 @@
     </div>
 
     <div class="card">
+      <h2>Preprocessor and Includes</h2>
+      <ul>
+        <li>Supports <code>#include "relative/path.h"</code></li>
+        <li>Supports <code>#include &lt;relative/or/absolute/path.h&gt;</code></li>
+        <li>Header files (<code>.h</code>) are valid include targets</li>
+        <li>Includes are expanded before lexing and parsing</li>
+        <li>Cyclic includes are rejected</li>
+      </ul>
+    </div>
+
+    <div class="card">
       <h2>Statements and Control Flow</h2>
       <ul>
-        <li>Variable declarations: <code>int x;</code>, <code>int x = 5;</code>, <code>string s;</code>, <code>string s = "hi";</code>, <code>int a[8];</code></li>
+        <li>Variable declarations: <code>int x;</code>, <code>int x = 5;</code>, <code>string s;</code>, <code>string s = "hi";</code>, <code>int a[8];</code>, <code>struct Person p;</code></li>
         <li>Scalar assignment and array element assignment</li>
+        <li>Struct field assignment: <code>p.age = 7;</code>, <code>p.name = "neo";</code></li>
         <li><code>if</code> / <code>else</code></li>
         <li><code>while</code></li>
         <li><code>for (init; condition; increment)</code></li>
@@ -68,12 +81,14 @@
     <div class="card">
       <h2>Expressions and Operators</h2>
       <ul>
-        <li>Integer arithmetic: <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>, unary <code>-</code></li>
+        <li>Integer arithmetic: <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>, <code>%</code>, unary <code>+</code>, unary <code>-</code></li>
+        <li>Increment/decrement: <code>++a</code>, <code>--a</code>, <code>a++</code>, <code>a--</code> (int locals)</li>
         <li>Comparisons: <code>==</code>, <code>!=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code></li>
         <li>Function call expressions</li>
         <li>Parenthesized expressions</li>
         <li>String literals</li>
         <li>Array element reads</li>
+        <li>Struct field reads</li>
       </ul>
     </div>
 
@@ -239,6 +254,7 @@ print_int(count);</code></div>
       <h2>Shell Workflow</h2>
       <ol>
         <li>Write a source file.</li>
+        <li>Optionally split reusable code into headers and include them.</li>
         <li>Compile in PrismOS shell with <code>cc /path/program.c /path/program.app</code>.</li>
         <li>Run it with <code>app-run /path/program.app</code>.</li>
       </ol>
@@ -254,17 +270,38 @@ print_int(count);</code></div>
         <p>Use this after compilation to execute the generated app package.</p>
         <div class="api-example"><code>app-run /HELLO.APP</code></div>
       </div>
+
+      <div class="api-item">
+        <h3 class="api-title"><code>Small Standard Library (Headers)</code></h3>
+        <p class="api-meta">Header-only helper library available under <code>/examples/std</code>.</p>
+        <p>Includes string helpers, math helpers, and IO wrappers that work with the new <code>#include</code> support.</p>
+        <div class="api-example"><code>#include "std/prism_string.h"
+#include "std/prism_math.h"
+#include "std/prism_io.h"</code></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Structs</h2>
+      <ul>
+        <li>Definition syntax: <code>struct Person { int age; string name; };</code></li>
+        <li>Field types currently supported: <code>int</code> and <code>string</code></li>
+        <li>Struct initializers are not supported yet (assign fields after declaration)</li>
+      </ul>
+      <p class="note">Struct values are represented with VM-backed field storage.</p>
     </div>
 
     <div class="card">
       <h2>Current Known Gaps</h2>
       <ul>
-        <li>No structs, unions, or enums</li>
+        <li>No unions or enums</li>
         <li>No pointers</li>
         <li>No floating-point types</li>
         <li>No global variables</li>
         <li>No module or import system</li>
+        <li>No separate object/link pipeline yet (includes are textual expansion)</li>
         <li>No dynamic array type beyond fixed <code>int[N]</code></li>
+        <li>No struct fields of type array or nested struct yet</li>
         <li>No string interpolation or format library yet</li>
         <li>Filesystem built-ins currently use simple status returns</li>
       </ul>

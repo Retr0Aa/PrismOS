@@ -459,7 +459,8 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
             case BCVM_OP_ADD:
             case BCVM_OP_SUB:
             case BCVM_OP_MUL:
-            case BCVM_OP_DIV: {
+            case BCVM_OP_DIV:
+            case BCVM_OP_MOD: {
                 int32_t rhs;
                 int32_t lhs;
                 if (sp < 2U) {
@@ -481,7 +482,7 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
                         ERROR_LOG("BCVM divide by zero");
                         return -1;
                     }
-                    stack[sp++] = lhs / rhs;
+                    stack[sp++] = (opcode == BCVM_OP_DIV) ? (lhs / rhs) : (lhs % rhs);
                 }
                 break;
             }

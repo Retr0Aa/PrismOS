@@ -1,6 +1,7 @@
 #include "irq.h"
 #include "platform/pic.h"
 #include "debug/log.h"
+#include "display/console.h"
 
 #include <stddef.h>
 
@@ -10,6 +11,77 @@
 
 static irq_handler_t irq_handlers[IRQ_COUNT];
 static exception_handler_t exception_handlers[EXCEPTION_COUNT];
+
+static void console_write_hex32(uint32_t value) {
+    char text[9];
+
+    for (int i = 7; i >= 0; i--) {
+        uint8_t nibble = (uint8_t)(value & 0x0FU);
+        text[i] = (char)((nibble < 10U) ? ('0' + (char)nibble) : ('A' + (char)(nibble - 10U)));
+        value >>= 4;
+    }
+
+    text[8] = '\0';
+    console_write(text);
+}
+
+static const char* exception_name(uint8_t vector) {
+    switch (vector) {
+        case 0: return "Divide by zero";
+        case 1: return "Debug";
+        case 2: return "Non-maskable interrupt";
+        case 3: return "Breakpoint";
+        case 4: return "Overflow";
+        case 5: return "Bound range exceeded";
+        case 6: return "Invalid opcode";
+        case 7: return "Device not available";
+        case 8: return "Double fault";
+        case 9: return "Coprocessor segment overrun";
+        case 10: return "Invalid TSS";
+        case 11: return "Segment not present";
+        case 12: return "Stack fault";
+        case 13: return "General protection fault";
+        case 14: return "Page fault";
+        case 15: return "Reserved";
+        case 16: return "x87 floating point";
+        case 17: return "Alignment check";
+        case 18: return "Machine check";
+        case 19: return "SIMD floating point";
+        case 20: return "Virtualization";
+        default: return "CPU exception";
+    }
+}
+
+static void panic_screen(registers_t* regs) {
+    console_set_color(COLOR_WHITE, COLOR_RED);
+    console_clear();
+    console_set_cursor(0, 0);
+    console_writeln("*** PRISMOS PANIC ***");
+    console_writeln("An unhandled CPU exception occurred.");
+    console_write("Vector: ");
+    console_write_uint((unsigned int)regs->int_no);
+    console_writeln("");
+    console_write("Name: ");
+    console_writeln(exception_name((uint8_t)regs->int_no));
+    console_write("Error code: ");
+    console_write_uint((unsigned int)regs->err_code);
+    console_writeln("");
+    console_write("EIP: 0x");
+    console_write_hex32(regs->eip);
+    console_writeln("");
+    console_write("CS: 0x");
+    console_write_hex32(regs->cs);
+    console_writeln("");
+    console_write("EFLAGS: 0x");
+    console_write_hex32(regs->eflags);
+    console_writeln("");
+    console_writeln("System halted.");
+
+    __asm__ volatile("cli");
+    for (;;) {
+        __asm__ volatile("hlt");
+    }
+}
 
 void irq_init(void)
 {
@@ -79,6 +151,5 @@ void isr_handler(registers_t *regs)
 
     ERROR_LOG("unhandled CPU exception");
     /* TODO: per-exception dispatch table for page-fault handler, etc. */
-    /* Halt — the kernel cannot safely continue after an unhandled exception */
-    __asm__ volatile("cli; hlt");
+    panic_screen(regs);
 }

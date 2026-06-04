@@ -72,6 +72,7 @@ enum {
     BCVM_OP_FILE_WRITE = 0x27,
     BCVM_OP_FILE_APPEND = 0x28,
     BCVM_OP_FILE_EXISTS = 0x29,
+    BCVM_OP_MOD = 0x2A,
 };
 
 #endif

@@ -73,7 +73,7 @@ $(BUILD)/app_manager.o
 $(BUILD)/%.o: boot/%.s | $(BUILD)
 	gcc -m32 -c $< -o $@
 
-$(BUILD)/%.o: src/kernel.c | $(BUILD)
+$(BUILD)/kernel.o: src/kernel.c | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/%.o: src/debug/%.c | $(BUILD)
@@ -106,7 +106,13 @@ $(BUILD)/%.o: src/apps/%.c | $(BUILD)
 $(BUILD)/%.o: src/platform/%.c | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
+$(BUILD)/%.o: src/interrupts/%.s | $(BUILD)
+	gcc -m32 -c $< -o $@
+
 $(BUILD)/%.o: src/interrupts/%.c | $(BUILD)
+	gcc $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/%.o: src/memory/%.c | $(BUILD)
 	gcc $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/%.o: src/util/%.c | $(BUILD)

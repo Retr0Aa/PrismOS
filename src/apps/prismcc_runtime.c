@@ -12,6 +12,10 @@
 #define PRISMCC_MAX_FUNCTIONS 64U
 #define PRISMCC_MAX_CALL_PATCHES 256U
 #define PRISMCC_MAX_PARAMS PRISMCC_MAX_LOCALS
+#define PRISMCC_MAX_STRUCTS 32U
+#define PRISMCC_MAX_STRUCT_FIELDS 16U
+#define PRISMCC_MAX_INCLUDE_DEPTH 8U
+#define PRISMCC_MAX_PATH 128U
 
 typedef enum {
     TOK_EOF = 0,
@@ -36,6 +40,7 @@ typedef enum {
     TOK_ELSE,
     TOK_WHILE,
     TOK_FOR,
+    TOK_STRUCT,
     TOK_STRING_TYPE,
     TOK_IDENTIFIER,
     TOK_NUMBER,
@@ -49,10 +54,14 @@ typedef enum {
     TOK_SEMI,
     TOK_ASSIGN,
     TOK_COMMA,
+    TOK_DOT,
     TOK_PLUS,
+    TOK_PLUSPLUS,
     TOK_MINUS,
+    TOK_MINUSMINUS,
     TOK_STAR,
     TOK_SLASH,
+    TOK_PERCENT,
     TOK_EQEQ,
     TOK_NEQ,
     TOK_LT,
@@ -65,12 +74,14 @@ typedef struct {
     TokenType type;
     char text[PRISMCC_MAX_TOKEN_TEXT];
     int32_t number;
+    uint32_t line;
 } Token;
 
 typedef struct {
     const char* src;
     uint32_t length;
     uint32_t position;
+    uint32_t line;
     Token current;
 } Lexer;
 
@@ -78,13 +89,26 @@ typedef struct {
     char name[32];
     uint8_t index;
     uint8_t type;
+    uint8_t struct_index;
 } Local;
 
 typedef enum {
     LOCAL_TYPE_INT = 0,
     LOCAL_TYPE_STRING = 1,
-    LOCAL_TYPE_ARRAY = 2
+    LOCAL_TYPE_ARRAY = 2,
+    LOCAL_TYPE_STRUCT = 3
 } LocalType;
+
+typedef struct {
+    char name[32];
+    uint8_t type;
+} StructField;
+
+typedef struct {
+    char name[32];
+    uint8_t field_count;
+    StructField fields[PRISMCC_MAX_STRUCT_FIELDS];
+} StructDef;
 
 typedef struct {
     char name[32];
@@ -111,6 +135,8 @@ typedef struct {
     uint32_t local_count;
     FunctionDef functions[PRISMCC_MAX_FUNCTIONS];
     uint32_t function_count;
+    StructDef structs[PRISMCC_MAX_STRUCTS];
+    uint32_t struct_count;
     CallPatch call_patches[PRISMCC_MAX_CALL_PATCHES];
     uint32_t call_patch_count;
     uint32_t main_entry;
@@ -118,6 +144,8 @@ typedef struct {
 } PrismCompiler;
 
 static char source_buffer[PRISMCC_MAX_SOURCE_SIZE + 1U];
+static char include_file_buffers[PRISMCC_MAX_INCLUDE_DEPTH][PRISMCC_MAX_SOURCE_SIZE + 1U];
+static char include_stack[PRISMCC_MAX_INCLUDE_DEPTH][PRISMCC_MAX_PATH];
 static uint8_t output_buffer[PRISM_APP_HEADER_SIZE + BCVM_IMAGE_HEADER_SIZE + PRISMCC_MAX_CODE_SIZE + PRISMCC_MAX_DATA_SIZE];
 static PrismCompiler compiler;
 
@@ -131,6 +159,55 @@ static void set_error(char* out, uint32_t capacity, const char* message) {
     while (message[i] != '\0' && i + 1U < capacity) {
         out[i] = message[i];
         i++;
+    }
+
+    out[i] = '\0';
+}
+
+static void set_error_with_line(char* out, uint32_t capacity, uint32_t line, const char* message) {
+    char line_text[16];
+    uint32_t line_len = 0;
+    uint32_t i = 0;
+
+    if (out == 0 || capacity == 0U) {
+        return;
+    }
+
+    if (line == 0U) {
+        set_error(out, capacity, message);
+        return;
+    }
+
+    do {
+        uint32_t digit = line % 10U;
+        line_text[line_len++] = (char)('0' + digit);
+        line /= 10U;
+    } while (line > 0U && line_len < sizeof(line_text));
+
+    if (capacity <= 7U) {
+        set_error(out, capacity, message);
+        return;
+    }
+
+    out[i++] = 'l';
+    out[i++] = 'i';
+    out[i++] = 'n';
+    out[i++] = 'e';
+    out[i++] = ' ';
+
+    while (line_len > 0U && i + 1U < capacity) {
+        out[i++] = line_text[--line_len];
+    }
+
+    if (i + 2U < capacity) {
+        out[i++] = ':';
+        out[i++] = ' ';
+    }
+
+    while (message[0] != '\0' && i + 1U < capacity) {
+        out[i] = *message;
+        i++;
+        message++;
     }
 
     out[i] = '\0';
@@ -180,6 +257,213 @@ static void copy_string(char* destination, const char* source, uint32_t capacity
     }
 
     destination[i] = '\0';
+}
+
+static void path_directory(const char* absolute_path, char* out, uint32_t out_capacity) {
+    uint32_t length = string_length(absolute_path);
+    uint32_t end = length;
+
+    if (out_capacity == 0U) {
+        return;
+    }
+
+    while (end > 0U && absolute_path[end - 1U] != '/') {
+        end--;
+    }
+
+    if (end == 0U) {
+        copy_string(out, "/", out_capacity);
+        return;
+    }
+
+    if (end >= out_capacity) {
+        end = out_capacity - 1U;
+    }
+
+    for (uint32_t i = 0; i < end; i++) {
+        out[i] = absolute_path[i];
+    }
+
+    if (end == 0U) {
+        out[0] = '/';
+        out[1] = '\0';
+        return;
+    }
+
+    out[end] = '\0';
+}
+
+static int append_source_text(const char* text, uint32_t length, uint32_t* io_output_size, char* out_error, uint32_t out_error_capacity) {
+    if (*io_output_size + length >= PRISMCC_MAX_SOURCE_SIZE) {
+        set_error(out_error, out_error_capacity, "source too large after include expansion");
+        return -1;
+    }
+
+    for (uint32_t i = 0; i < length; i++) {
+        source_buffer[*io_output_size + i] = text[i];
+    }
+
+    *io_output_size += length;
+    source_buffer[*io_output_size] = '\0';
+    return 0;
+}
+
+static int append_source_char(char ch, uint32_t* io_output_size, char* out_error, uint32_t out_error_capacity) {
+    return append_source_text(&ch, 1U, io_output_size, out_error, out_error_capacity);
+}
+
+static int parse_include_directive(const char* line, uint32_t length, char* out_path, uint32_t out_path_capacity) {
+    uint32_t pos = 0;
+    char terminator;
+    uint32_t out_index = 0;
+
+    while (pos < length && (line[pos] == ' ' || line[pos] == '\t')) {
+        pos++;
+    }
+
+    if (pos >= length || line[pos] != '#') {
+        return 0;
+    }
+
+    pos++;
+    while (pos < length && (line[pos] == ' ' || line[pos] == '\t')) {
+        pos++;
+    }
+
+    if (pos + 7U > length
+        || line[pos + 0U] != 'i'
+        || line[pos + 1U] != 'n'
+        || line[pos + 2U] != 'c'
+        || line[pos + 3U] != 'l'
+        || line[pos + 4U] != 'u'
+        || line[pos + 5U] != 'd'
+        || line[pos + 6U] != 'e') {
+        return -1;
+    }
+
+    pos += 7U;
+    while (pos < length && (line[pos] == ' ' || line[pos] == '\t')) {
+        pos++;
+    }
+
+    if (pos >= length) {
+        return -1;
+    }
+
+    if (line[pos] == '"') {
+        terminator = '"';
+    } else if (line[pos] == '<') {
+        terminator = '>';
+    } else {
+        return -1;
+    }
+
+    pos++;
+    while (pos < length && line[pos] != terminator) {
+        if (out_index + 1U >= out_path_capacity) {
+            return -1;
+        }
+
+        out_path[out_index++] = line[pos++];
+    }
+
+    if (pos >= length || line[pos] != terminator || out_index == 0U) {
+        return -1;
+    }
+
+    out_path[out_index] = '\0';
+    return 1;
+}
+
+static int preprocess_file_recursive(const char* absolute_path,
+    uint32_t depth,
+    uint32_t* io_output_size,
+    char* out_error,
+    uint32_t out_error_capacity) {
+    uint32_t file_size = 0;
+    uint32_t line_start = 0;
+
+    if (depth >= PRISMCC_MAX_INCLUDE_DEPTH) {
+        set_error(out_error, out_error_capacity, "include nesting too deep");
+        return -1;
+    }
+
+    for (uint32_t i = 0; i < depth; i++) {
+        if (string_equals(include_stack[i], absolute_path)) {
+            set_error(out_error, out_error_capacity, "cyclic include detected");
+            return -1;
+        }
+    }
+
+    copy_string(include_stack[depth], absolute_path, sizeof(include_stack[depth]));
+
+    if (vfs_read_file(absolute_path, include_file_buffers[depth], sizeof(include_file_buffers[depth]), &file_size) != 0) {
+        set_error(out_error, out_error_capacity, "failed to read include file");
+        return -1;
+    }
+
+    while (line_start < file_size) {
+        uint32_t line_end = line_start;
+        int include_result;
+        char include_path[PRISMCC_MAX_PATH];
+
+        while (line_end < file_size && include_file_buffers[depth][line_end] != '\n') {
+            line_end++;
+        }
+
+        include_result = parse_include_directive(&include_file_buffers[depth][line_start],
+            line_end - line_start,
+            include_path,
+            sizeof(include_path));
+
+        if (include_result == 1) {
+            char base_dir[PRISMCC_MAX_PATH];
+            char resolved_include[PRISMCC_MAX_PATH];
+
+            if (include_path[0] == '/') {
+                copy_string(resolved_include, include_path, sizeof(resolved_include));
+            } else {
+                path_directory(absolute_path, base_dir, sizeof(base_dir));
+                if (vfs_normalize_path(base_dir, include_path, resolved_include, sizeof(resolved_include)) != 0) {
+                    set_error(out_error, out_error_capacity, "invalid include path");
+                    return -1;
+                }
+            }
+
+            if (preprocess_file_recursive(resolved_include, depth + 1U, io_output_size, out_error, out_error_capacity) != 0) {
+                return -1;
+            }
+
+            if (append_source_char('\n', io_output_size, out_error, out_error_capacity) != 0) {
+                return -1;
+            }
+        } else if (include_result == 0) {
+            if (append_source_text(&include_file_buffers[depth][line_start],
+                line_end - line_start,
+                io_output_size,
+                out_error,
+                out_error_capacity) != 0) {
+                return -1;
+            }
+
+            if (line_end < file_size && include_file_buffers[depth][line_end] == '\n') {
+                if (append_source_char('\n', io_output_size, out_error, out_error_capacity) != 0) {
+                    return -1;
+                }
+            }
+        } else {
+            set_error(out_error, out_error_capacity, "unsupported preprocessor directive");
+            return -1;
+        }
+
+        if (line_end >= file_size) {
+            break;
+        }
+
+        line_start = line_end + 1U;
+    }
+
+    return 0;
 }
 
 static int token_is_name(TokenType type) {
@@ -275,6 +559,10 @@ static TokenType keyword_type(const char* text) {
         return TOK_FOR;
     }
 
+    if (string_equals(text, "struct")) {
+        return TOK_STRUCT;
+    }
+
     return TOK_IDENTIFIER;
 }
 
@@ -283,6 +571,9 @@ static void lexer_skip_ws(Lexer* lexer) {
         char c = lexer->src[lexer->position];
 
         if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+            if (c == '\n') {
+                lexer->line++;
+            }
             lexer->position++;
             continue;
         }
@@ -306,6 +597,7 @@ static Token lexer_next(Lexer* lexer, const char** out_error) {
     token.type = TOK_EOF;
     token.text[0] = '\0';
     token.number = 0;
+    token.line = lexer->line;
 
     lexer_skip_ws(lexer);
 
@@ -355,10 +647,26 @@ static Token lexer_next(Lexer* lexer, const char** out_error) {
             case '}': token.type = TOK_RBRACE; return token;
             case ';': token.type = TOK_SEMI; return token;
             case ',': token.type = TOK_COMMA; return token;
-            case '+': token.type = TOK_PLUS; return token;
-            case '-': token.type = TOK_MINUS; return token;
+            case '.': token.type = TOK_DOT; return token;
+            case '+':
+                if (lexer->position < lexer->length && lexer->src[lexer->position] == '+') {
+                    lexer->position++;
+                    token.type = TOK_PLUSPLUS;
+                } else {
+                    token.type = TOK_PLUS;
+                }
+                return token;
+            case '-':
+                if (lexer->position < lexer->length && lexer->src[lexer->position] == '-') {
+                    lexer->position++;
+                    token.type = TOK_MINUSMINUS;
+                } else {
+                    token.type = TOK_MINUS;
+                }
+                return token;
             case '*': token.type = TOK_STAR; return token;
             case '/': token.type = TOK_SLASH; return token;
+            case '%': token.type = TOK_PERCENT; return token;
             case '=':
                 if (lexer->position < lexer->length && lexer->src[lexer->position] == '=') {
                     lexer->position++;
@@ -535,6 +843,55 @@ static Local* find_local_entry(PrismCompiler* compiler, const char* name) {
     return 0;
 }
 
+static StructDef* find_struct_def(PrismCompiler* compiler, const char* name) {
+    for (uint32_t i = 0; i < compiler->struct_count; i++) {
+        if (string_equals(compiler->structs[i].name, name)) {
+            return &compiler->structs[i];
+        }
+    }
+
+    return 0;
+}
+
+static int find_struct_field_index(const StructDef* def, const char* field_name) {
+    for (uint32_t i = 0; i < def->field_count; i++) {
+        if (string_equals(def->fields[i].name, field_name)) {
+            return (int)i;
+        }
+    }
+
+    return -1;
+}
+
+static const StructField* find_struct_field(const StructDef* def, const char* field_name) {
+    int index = find_struct_field_index(def, field_name);
+    if (index < 0) {
+        return 0;
+    }
+
+    return &def->fields[(uint32_t)index];
+}
+
+static int add_struct_def(PrismCompiler* compiler, const char* name, StructDef** out_struct) {
+    if (compiler->struct_count >= PRISMCC_MAX_STRUCTS) {
+        compiler->error = "too many struct definitions";
+        return -1;
+    }
+
+    if (find_struct_def(compiler, name) != 0) {
+        compiler->error = "duplicate struct definition";
+        return -1;
+    }
+
+    copy_string(compiler->structs[compiler->struct_count].name,
+        name,
+        sizeof(compiler->structs[compiler->struct_count].name));
+    compiler->structs[compiler->struct_count].field_count = 0;
+    *out_struct = &compiler->structs[compiler->struct_count];
+    compiler->struct_count++;
+    return 0;
+}
+
 static int find_local(PrismCompiler* compiler, const char* name) {
     Local* local = find_local_entry(compiler, name);
     return local != 0 ? (int)local->index : -1;
@@ -554,6 +911,7 @@ static int add_local(PrismCompiler* compiler, const char* name, LocalType type, 
     copy_string(compiler->locals[compiler->local_count].name, name, sizeof(compiler->locals[compiler->local_count].name));
     compiler->locals[compiler->local_count].index = (uint8_t)compiler->local_count;
     compiler->locals[compiler->local_count].type = (uint8_t)type;
+    compiler->locals[compiler->local_count].struct_index = 0xFFU;
     *out_index = (uint8_t)compiler->local_count;
     compiler->local_count++;
     return 0;
@@ -672,6 +1030,24 @@ static uint8_t guess_expression_type(PrismCompiler* compiler) {
     if (token_is_name(type)) {
         Local* local = find_local_entry(compiler, compiler->lexer.current.text);
         if (local != 0) {
+            if (local->type == (uint8_t)LOCAL_TYPE_STRUCT) {
+                Lexer peek = compiler->lexer;
+                const char* lexer_error = 0;
+                Token after_name = lexer_next(&peek, &lexer_error);
+
+                if (lexer_error == 0 && after_name.type == TOK_DOT) {
+                    Token field = lexer_next(&peek, &lexer_error);
+
+                    if (lexer_error == 0 && token_is_name(field.type) && local->struct_index != 0xFFU) {
+                        StructDef* def = &compiler->structs[local->struct_index];
+                        const StructField* struct_field = find_struct_field(def, field.text);
+                        if (struct_field != 0) {
+                            return struct_field->type;
+                        }
+                    }
+                }
+            }
+
             return local->type;
         }
     }
@@ -785,6 +1161,136 @@ static int parse_for_string_declaration(PrismCompiler* compiler) {
     return parse_declaration(compiler, LOCAL_TYPE_STRING, TOK_STRING_TYPE, "expected identifier after string", 0, 1);
 }
 
+static int parse_struct_variable_declaration(PrismCompiler* compiler, int expect_semicolon) {
+    char struct_name[PRISMCC_MAX_TOKEN_TEXT];
+    char variable_name[PRISMCC_MAX_TOKEN_TEXT];
+    StructDef* def;
+    uint8_t local_index;
+
+    if (expect(compiler, TOK_STRUCT, "expected 'struct'") != 0) {
+        return -1;
+    }
+
+    if (!token_is_name(compiler->lexer.current.type)) {
+        compiler->error = "expected struct type name";
+        return -1;
+    }
+
+    copy_string(struct_name, compiler->lexer.current.text, sizeof(struct_name));
+    next_token(compiler);
+
+    def = find_struct_def(compiler, struct_name);
+    if (def == 0) {
+        compiler->error = "unknown struct type";
+        return -1;
+    }
+
+    if (!token_is_name(compiler->lexer.current.type)) {
+        compiler->error = "expected struct variable name";
+        return -1;
+    }
+
+    copy_string(variable_name, compiler->lexer.current.text, sizeof(variable_name));
+    next_token(compiler);
+
+    if (add_local(compiler, variable_name, LOCAL_TYPE_STRUCT, &local_index) != 0) {
+        return -1;
+    }
+
+    compiler->locals[local_index].struct_index = (uint8_t)(def - compiler->structs);
+
+    if (compiler->lexer.current.type == TOK_ASSIGN) {
+        compiler->error = "struct initializer is not supported yet";
+        return -1;
+    }
+
+    if (emit_u8(compiler, BCVM_OP_ARR_NEW) != 0 || emit_u16(compiler, def->field_count) != 0) {
+        return -1;
+    }
+
+    if (emit_u8(compiler, BCVM_OP_STORE_LOCAL) != 0 || emit_u8(compiler, local_index) != 0) {
+        return -1;
+    }
+
+    if (expect_semicolon) {
+        return expect(compiler, TOK_SEMI, "expected ';' after struct declaration");
+    }
+
+    return 0;
+}
+
+static int parse_struct_definition(PrismCompiler* compiler) {
+    char struct_name[PRISMCC_MAX_TOKEN_TEXT];
+    StructDef* def;
+
+    if (expect(compiler, TOK_STRUCT, "expected 'struct'") != 0) {
+        return -1;
+    }
+
+    if (!token_is_name(compiler->lexer.current.type)) {
+        compiler->error = "expected struct name";
+        return -1;
+    }
+
+    copy_string(struct_name, compiler->lexer.current.text, sizeof(struct_name));
+    next_token(compiler);
+
+    if (add_struct_def(compiler, struct_name, &def) != 0) {
+        return -1;
+    }
+
+    if (expect(compiler, TOK_LBRACE, "expected '{' in struct definition") != 0) {
+        return -1;
+    }
+
+    while (compiler->lexer.current.type != TOK_RBRACE && compiler->lexer.current.type != TOK_EOF) {
+        TokenType field_type_token = compiler->lexer.current.type;
+        LocalType field_type;
+
+        if (field_type_token != TOK_INT && field_type_token != TOK_STRING_TYPE) {
+            compiler->error = "struct fields must be int or string";
+            return -1;
+        }
+
+        field_type = field_type_token == TOK_STRING_TYPE ? LOCAL_TYPE_STRING : LOCAL_TYPE_INT;
+
+        next_token(compiler);
+
+        if (!token_is_name(compiler->lexer.current.type)) {
+            compiler->error = "expected struct field name";
+            return -1;
+        }
+
+        if (find_struct_field(def, compiler->lexer.current.text) != 0) {
+            compiler->error = "duplicate struct field";
+            return -1;
+        }
+
+        if (def->field_count >= PRISMCC_MAX_STRUCT_FIELDS) {
+            compiler->error = "too many struct fields";
+            return -1;
+        }
+
+        copy_string(def->fields[def->field_count].name,
+            compiler->lexer.current.text,
+            sizeof(def->fields[def->field_count].name));
+        def->fields[def->field_count].type = (uint8_t)field_type;
+        def->field_count++;
+
+        next_token(compiler);
+
+        if (expect(compiler, TOK_SEMI, "expected ';' after struct field") != 0) {
+            return -1;
+        }
+    }
+
+    if (expect(compiler, TOK_RBRACE, "expected '}' after struct fields") != 0) {
+        return -1;
+    }
+
+    return expect(compiler, TOK_SEMI, "expected ';' after struct definition");
+}
+
 static int parse_call_after_name(PrismCompiler* compiler, const char* name, int discard_return) {
     uint8_t arg_count = 0;
     uint8_t arg_types[PRISMCC_MAX_PARAMS];
@@ -866,6 +1372,70 @@ static int parse_assignment_after_name(PrismCompiler* compiler, const char* name
     return 0;
 }
 
+static int emit_local_update(PrismCompiler* compiler, Local* local, int delta, int keep_result, int postfix_result) {
+    uint8_t op;
+
+    if (local == 0) {
+        compiler->error = "assignment to unknown identifier";
+        return -1;
+    }
+
+    if (local->type != (uint8_t)LOCAL_TYPE_INT) {
+        compiler->error = "increment/decrement requires int variable";
+        return -1;
+    }
+
+    op = (delta >= 0) ? BCVM_OP_ADD : BCVM_OP_SUB;
+
+    if (postfix_result) {
+        if (emit_u8(compiler, BCVM_OP_LOAD_LOCAL) != 0 || emit_u8(compiler, local->index) != 0) {
+            return -1;
+        }
+    }
+
+    if (emit_u8(compiler, BCVM_OP_LOAD_LOCAL) != 0 || emit_u8(compiler, local->index) != 0) {
+        return -1;
+    }
+
+    if (emit_u8(compiler, BCVM_OP_PUSH_I32) != 0 || emit_u32(compiler, 1U) != 0) {
+        return -1;
+    }
+
+    if (emit_u8(compiler, op) != 0) {
+        return -1;
+    }
+
+    if (emit_u8(compiler, BCVM_OP_STORE_LOCAL) != 0 || emit_u8(compiler, local->index) != 0) {
+        return -1;
+    }
+
+    if (keep_result && !postfix_result) {
+        if (emit_u8(compiler, BCVM_OP_LOAD_LOCAL) != 0 || emit_u8(compiler, local->index) != 0) {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+static int parse_prefix_update(PrismCompiler* compiler, int delta) {
+    char name[PRISMCC_MAX_TOKEN_TEXT];
+    Local* local;
+
+    next_token(compiler);
+
+    if (!token_is_name(compiler->lexer.current.type)) {
+        compiler->error = "expected identifier after increment/decrement";
+        return -1;
+    }
+
+    copy_string(name, compiler->lexer.current.text, sizeof(name));
+    next_token(compiler);
+
+    local = find_local_entry(compiler, name);
+    return emit_local_update(compiler, local, delta, 1, 0);
+}
+
 static int parse_array_store_after_name(PrismCompiler* compiler, const char* name) {
     Local* local = find_local_entry(compiler, name);
 
@@ -906,6 +1476,59 @@ static int parse_array_store_after_name(PrismCompiler* compiler, const char* nam
     return emit_u8(compiler, BCVM_OP_ARR_SET);
 }
 
+static int parse_struct_store_after_name(PrismCompiler* compiler, const char* name) {
+    Local* local = find_local_entry(compiler, name);
+    StructDef* def;
+    int field_index;
+
+    if (local == 0) {
+        compiler->error = "assignment to unknown identifier";
+        return -1;
+    }
+
+    if (local->type != (uint8_t)LOCAL_TYPE_STRUCT || local->struct_index == 0xFFU) {
+        compiler->error = "field assignment requires a struct variable";
+        return -1;
+    }
+
+    def = &compiler->structs[local->struct_index];
+
+    if (expect(compiler, TOK_DOT, "expected '.' in field assignment") != 0) {
+        return -1;
+    }
+
+    if (!token_is_name(compiler->lexer.current.type)) {
+        compiler->error = "expected field name";
+        return -1;
+    }
+
+    field_index = find_struct_field_index(def, compiler->lexer.current.text);
+    if (field_index < 0) {
+        compiler->error = "unknown struct field";
+        return -1;
+    }
+
+    next_token(compiler);
+
+    if (expect(compiler, TOK_ASSIGN, "expected '=' in field assignment") != 0) {
+        return -1;
+    }
+
+    if (emit_u8(compiler, BCVM_OP_LOAD_LOCAL) != 0 || emit_u8(compiler, local->index) != 0) {
+        return -1;
+    }
+
+    if (emit_u8(compiler, BCVM_OP_PUSH_I32) != 0 || emit_u32(compiler, (uint32_t)field_index) != 0) {
+        return -1;
+    }
+
+    if (parse_expression(compiler) != 0) {
+        return -1;
+    }
+
+    return emit_u8(compiler, BCVM_OP_ARR_SET);
+}
+
 static int parse_for_clause_item(PrismCompiler* compiler, int allow_declaration) {
     if (compiler->lexer.current.type == TOK_INT) {
         if (!allow_declaration) {
@@ -923,14 +1546,30 @@ static int parse_for_clause_item(PrismCompiler* compiler, int allow_declaration)
         return parse_for_string_declaration(compiler);
     }
 
+    if (compiler->lexer.current.type == TOK_STRUCT) {
+        if (!allow_declaration) {
+            compiler->error = "for increment does not support declaration";
+            return -1;
+        }
+
+        return parse_struct_variable_declaration(compiler, 0);
+    }
+
     if (token_is_name(compiler->lexer.current.type)) {
         char name[PRISMCC_MAX_TOKEN_TEXT];
+        Local* local;
 
         copy_string(name, compiler->lexer.current.text, sizeof(name));
         next_token(compiler);
 
+        local = find_local_entry(compiler, name);
+
         if (compiler->lexer.current.type == TOK_ASSIGN) {
             return parse_assignment_after_name(compiler, name);
+        }
+
+        if (compiler->lexer.current.type == TOK_DOT) {
+            return parse_struct_store_after_name(compiler, name);
         }
 
         if (compiler->lexer.current.type == TOK_LBRACKET) {
@@ -939,6 +1578,16 @@ static int parse_for_clause_item(PrismCompiler* compiler, int allow_declaration)
 
         if (compiler->lexer.current.type == TOK_LPAREN) {
             return parse_call_after_name(compiler, name, 1);
+        }
+
+        if (compiler->lexer.current.type == TOK_PLUSPLUS) {
+            next_token(compiler);
+            return emit_local_update(compiler, local, 1, 0, 0);
+        }
+
+        if (compiler->lexer.current.type == TOK_MINUSMINUS) {
+            next_token(compiler);
+            return emit_local_update(compiler, local, -1, 0, 0);
         }
 
         compiler->error = "unsupported for clause item";
@@ -1188,6 +1837,42 @@ static int parse_primary(PrismCompiler* compiler) {
             return -1;
         }
 
+        if (compiler->lexer.current.type == TOK_DOT) {
+            StructDef* def;
+            int field_index;
+
+            if (local->type != (uint8_t)LOCAL_TYPE_STRUCT || local->struct_index == 0xFFU) {
+                compiler->error = "field access requires a struct variable";
+                return -1;
+            }
+
+            def = &compiler->structs[local->struct_index];
+
+            next_token(compiler);
+            if (!token_is_name(compiler->lexer.current.type)) {
+                compiler->error = "expected field name";
+                return -1;
+            }
+
+            field_index = find_struct_field_index(def, compiler->lexer.current.text);
+            if (field_index < 0) {
+                compiler->error = "unknown struct field";
+                return -1;
+            }
+
+            next_token(compiler);
+
+            if (emit_u8(compiler, BCVM_OP_LOAD_LOCAL) != 0 || emit_u8(compiler, local->index) != 0) {
+                return -1;
+            }
+
+            if (emit_u8(compiler, BCVM_OP_PUSH_I32) != 0 || emit_u32(compiler, (uint32_t)field_index) != 0) {
+                return -1;
+            }
+
+            return emit_u8(compiler, BCVM_OP_ARR_GET);
+        }
+
         if (compiler->lexer.current.type == TOK_LBRACKET) {
             if (local->type != (uint8_t)LOCAL_TYPE_ARRAY) {
                 compiler->error = "indexed access requires an array variable";
@@ -1215,6 +1900,16 @@ static int parse_primary(PrismCompiler* compiler) {
             return -1;
         }
 
+        if (compiler->lexer.current.type == TOK_PLUSPLUS) {
+            next_token(compiler);
+            return emit_local_update(compiler, local, 1, 1, 1);
+        }
+
+        if (compiler->lexer.current.type == TOK_MINUSMINUS) {
+            next_token(compiler);
+            return emit_local_update(compiler, local, -1, 1, 1);
+        }
+
         if (emit_u8(compiler, BCVM_OP_LOAD_LOCAL) != 0 || emit_u8(compiler, local->index) != 0) {
             return -1;
         }
@@ -1236,6 +1931,11 @@ static int parse_primary(PrismCompiler* compiler) {
 }
 
 static int parse_unary(PrismCompiler* compiler) {
+    if (compiler->lexer.current.type == TOK_PLUS) {
+        next_token(compiler);
+        return parse_unary(compiler);
+    }
+
     if (compiler->lexer.current.type == TOK_MINUS) {
         next_token(compiler);
         if (parse_unary(compiler) != 0) {
@@ -1243,6 +1943,14 @@ static int parse_unary(PrismCompiler* compiler) {
         }
 
         return emit_u8(compiler, BCVM_OP_NEG);
+    }
+
+    if (compiler->lexer.current.type == TOK_PLUSPLUS) {
+        return parse_prefix_update(compiler, 1);
+    }
+
+    if (compiler->lexer.current.type == TOK_MINUSMINUS) {
+        return parse_prefix_update(compiler, -1);
     }
 
     return parse_primary(compiler);
@@ -1253,7 +1961,9 @@ static int parse_term(PrismCompiler* compiler) {
         return -1;
     }
 
-    while (compiler->lexer.current.type == TOK_STAR || compiler->lexer.current.type == TOK_SLASH) {
+    while (compiler->lexer.current.type == TOK_STAR
+        || compiler->lexer.current.type == TOK_SLASH
+        || compiler->lexer.current.type == TOK_PERCENT) {
         TokenType op = compiler->lexer.current.type;
         next_token(compiler);
 
@@ -1261,7 +1971,21 @@ static int parse_term(PrismCompiler* compiler) {
             return -1;
         }
 
-        if (emit_u8(compiler, op == TOK_STAR ? BCVM_OP_MUL : BCVM_OP_DIV) != 0) {
+        if (op == TOK_STAR) {
+            if (emit_u8(compiler, BCVM_OP_MUL) != 0) {
+                return -1;
+            }
+        } else if (op == TOK_SLASH) {
+            if (emit_u8(compiler, BCVM_OP_DIV) != 0) {
+                return -1;
+            }
+        } else {
+            if (emit_u8(compiler, BCVM_OP_MOD) != 0) {
+                return -1;
+            }
+        }
+
+        if (compiler->error != 0) {
             return -1;
         }
     }
@@ -1534,6 +2258,10 @@ static int parse_statement(PrismCompiler* compiler, int* saw_return) {
         return parse_string_declaration(compiler, 1);
     }
 
+    if (compiler->lexer.current.type == TOK_STRUCT) {
+        return parse_struct_variable_declaration(compiler, 1);
+    }
+
     if (compiler->lexer.current.type == TOK_PRINT) {
         uint8_t print_arg_type;
 
@@ -1797,11 +2525,26 @@ static int parse_statement(PrismCompiler* compiler, int* saw_return) {
         return 0;
     }
 
+    if (compiler->lexer.current.type == TOK_PLUSPLUS || compiler->lexer.current.type == TOK_MINUSMINUS) {
+        if (parse_expression(compiler) != 0) {
+            return -1;
+        }
+
+        if (expect(compiler, TOK_SEMI, "expected ';' after increment/decrement") != 0) {
+            return -1;
+        }
+
+        return emit_u8(compiler, BCVM_OP_POP);
+    }
+
     if (token_is_name(compiler->lexer.current.type)) {
         char name[PRISMCC_MAX_TOKEN_TEXT];
+        Local* local;
 
         copy_string(name, compiler->lexer.current.text, sizeof(name));
         next_token(compiler);
+
+        local = find_local_entry(compiler, name);
 
         if (compiler->lexer.current.type == TOK_ASSIGN) {
             if (parse_assignment_after_name(compiler, name) != 0) {
@@ -1809,6 +2552,14 @@ static int parse_statement(PrismCompiler* compiler, int* saw_return) {
             }
 
             return expect(compiler, TOK_SEMI, "expected ';' after assignment");
+        }
+
+        if (compiler->lexer.current.type == TOK_DOT) {
+            if (parse_struct_store_after_name(compiler, name) != 0) {
+                return -1;
+            }
+
+            return expect(compiler, TOK_SEMI, "expected ';' after field assignment");
         }
 
         if (compiler->lexer.current.type == TOK_LBRACKET) {
@@ -1825,6 +2576,26 @@ static int parse_statement(PrismCompiler* compiler, int* saw_return) {
             }
 
             return expect(compiler, TOK_SEMI, "expected ';' after function call");
+        }
+
+        if (compiler->lexer.current.type == TOK_PLUSPLUS) {
+            next_token(compiler);
+
+            if (emit_local_update(compiler, local, 1, 0, 0) != 0) {
+                return -1;
+            }
+
+            return expect(compiler, TOK_SEMI, "expected ';' after increment");
+        }
+
+        if (compiler->lexer.current.type == TOK_MINUSMINUS) {
+            next_token(compiler);
+
+            if (emit_local_update(compiler, local, -1, 0, 0) != 0) {
+                return -1;
+            }
+
+            return expect(compiler, TOK_SEMI, "expected ';' after decrement");
         }
 
         compiler->error = "unsupported statement";
@@ -1959,6 +2730,14 @@ static int resolve_call_patches(PrismCompiler* compiler) {
 
 static int parse_program(PrismCompiler* compiler) {
     while (compiler->lexer.current.type != TOK_EOF) {
+        if (compiler->lexer.current.type == TOK_STRUCT) {
+            if (parse_struct_definition(compiler) != 0) {
+                return -1;
+            }
+
+            continue;
+        }
+
         if (compiler->lexer.current.type != TOK_INT && compiler->lexer.current.type != TOK_STRING_TYPE) {
             compiler->error = "top-level items must be int or string methods";
             return -1;
@@ -1999,19 +2778,21 @@ int prismcc_compile_file(const char* input_abs_path, const char* output_abs_path
         return -1;
     }
 
-    if (vfs_read_file(input_abs_path, source_buffer, sizeof(source_buffer), &source_size) != 0) {
-        set_error(out_error, out_error_capacity, "failed to read source file");
+    source_buffer[0] = '\0';
+    if (preprocess_file_recursive(input_abs_path, 0U, &source_size, out_error, out_error_capacity) != 0) {
         return -1;
     }
 
     compiler.lexer.src = source_buffer;
     compiler.lexer.length = source_size;
     compiler.lexer.position = 0;
+    compiler.lexer.line = 1U;
     compiler.lexer.current.type = TOK_EOF;
     compiler.code_size = 0;
     compiler.data_size = 0;
     compiler.local_count = 0;
     compiler.function_count = 0;
+    compiler.struct_count = 0;
     compiler.call_patch_count = 0;
     compiler.main_entry = 0xFFFFFFFFU;
     compiler.error = 0;
@@ -2026,7 +2807,7 @@ int prismcc_compile_file(const char* input_abs_path, const char* output_abs_path
 
     if (compiler.error != 0) {
         ERROR_LOG("in-OS prismcc compile failed");
-        set_error(out_error, out_error_capacity, compiler.error);
+        set_error_with_line(out_error, out_error_capacity, compiler.lexer.current.line, compiler.error);
         return -1;
     }
 

@@ -4,12 +4,11 @@
 #include "apps/app_runtime.h"
 #include "debug/log.h"
 #include "filesystem/vfs.h"
+#include "util/string.h"
 
 #define APPS_ROOT_PATH "/APPS"
 #define APPS_EDITOR_PATH "/APPS/EDITOR.APP"
 #define APPS_IDE_PATH "/APPS/IDE.APP"
-
-#define APPS_EDITOR_PATH "/APPS/EDITOR.APP"
 static int app_manager_ready = 0;
 
 static void write_u16le(uint8_t* out, uint16_t value) {
@@ -148,8 +147,16 @@ int app_manager_run_path(const char* app_abs_path, const char* args) {
         ERROR_LOG("app manager failed to load app package");
 
         if (app_abs_path[0] == '/' && app_abs_path[1] == 'A' && app_abs_path[2] == 'P' && app_abs_path[3] == 'P' && app_abs_path[4] == 'S') {
-            if (ensure_editor_app_installed() == 0 && app_loader_load_image(app_abs_path, &image) == 0) {
-                DEBUG_LOG("app manager repaired missing editor app package");
+            int repaired = -1;
+
+            if (strcmp(app_abs_path, APPS_EDITOR_PATH) == 0) {
+                repaired = ensure_editor_app_installed();
+            } else if (strcmp(app_abs_path, APPS_IDE_PATH) == 0) {
+                repaired = ensure_ide_app_installed();
+            }
+
+            if (repaired == 0 && app_loader_load_image(app_abs_path, &image) == 0) {
+                DEBUG_LOG("app manager repaired missing built-in app package");
             } else {
                 return -1;
             }

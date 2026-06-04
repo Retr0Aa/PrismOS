@@ -71,6 +71,7 @@ static void command_cat(const char* arguments);
 static void command_write(const char* arguments);
 static void command_append(const char* arguments);
 static void command_edit(const char* arguments);
+static void command_ide(const char* arguments);
 static void command_app_run(const char* arguments);
 static void command_cc(const char* arguments);
 static void command_mv(const char* arguments);
@@ -161,6 +162,7 @@ static const Command commands[] = {
     {"edit", "open text editor application", command_edit},
     {"app-run", "run app package path [args]", command_app_run},
     {"cc", "compile subset C source to app", command_cc},
+    {"ide", "open integrated development environment application", command_ide},
 };
 
 static const int command_count = (int)(sizeof(commands) / sizeof(commands[0]));
@@ -550,6 +552,26 @@ static void command_edit(const char* arguments) {
 
     if (app_manager_run_editor(absolute) != 0) {
         console_writeln("editor failed");
+    }
+}
+
+static void command_ide(const char* arguments) {
+    char token[COMMAND_TOKEN_CAPACITY];
+    char absolute[COMMAND_PATH_CAPACITY];
+    const char* remainder = 0;
+
+    if (parse_token(arguments, token, sizeof(token), &remainder) != 0 || *remainder != '\0') {
+        console_writeln("Usage: ide <path>");
+        return;
+    }
+
+    if (resolve_to_absolute_path(token, absolute, sizeof(absolute)) != 0) {
+        console_writeln("Invalid path");
+        return;
+    }
+
+    if (app_manager_run_ide(absolute) != 0) {
+        console_writeln("ide failed");
     }
 }
 

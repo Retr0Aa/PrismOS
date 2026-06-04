@@ -7,7 +7,9 @@
 
 #define APPS_ROOT_PATH "/APPS"
 #define APPS_EDITOR_PATH "/APPS/EDITOR.APP"
+#define APPS_IDE_PATH "/APPS/IDE.APP"
 
+#define APPS_EDITOR_PATH "/APPS/EDITOR.APP"
 static int app_manager_ready = 0;
 
 static void write_u16le(uint8_t* out, uint16_t value) {
@@ -52,6 +54,36 @@ static int ensure_editor_app_installed(void) {
     return 0;
 }
 
+static int ensure_ide_app_installed(void) {
+    app_loader_image_t image;
+    uint8_t package[PRISM_APP_HEADER_SIZE + 6U];
+
+    if (app_loader_load_image(APPS_IDE_PATH, &image) == 0) {
+        return 0;
+    }
+
+    write_u32le(&package[0], PRISM_APP_MAGIC);
+    write_u16le(&package[4], PRISM_APP_FORMAT_VERSION);
+    write_u16le(&package[6], 0U);
+    write_u32le(&package[8], 0U);
+    write_u32le(&package[12], 6U);
+    write_u32le(&package[16], 0U);
+    package[20] = 'I';
+    package[21] = 'D';
+    package[22] = 'E';
+    package[23] = '\0';
+    package[24] = '\0';
+    package[25] = '\0';
+
+    if (vfs_write_file(APPS_IDE_PATH, (const char*)package, sizeof(package), 0) != 0) {
+        ERROR_LOG("failed to install ide app package");
+        return -1;
+    }
+
+    DEBUG_LOG("ide app package installed");
+    return 0;
+}
+
 int app_manager_init(void) {
     int is_dir = 0;
 
@@ -69,6 +101,11 @@ int app_manager_init(void) {
     }
 
     if (ensure_editor_app_installed() != 0) {
+        app_manager_ready = 0;
+        return -1;
+    }
+
+    if (ensure_ide_app_installed() != 0) {
         app_manager_ready = 0;
         return -1;
     }
@@ -140,4 +177,14 @@ int app_manager_run_editor(const char* target_abs_path) {
 
     DEBUG_LOG("app manager launching editor app");
     return app_manager_run_path(APPS_EDITOR_PATH, target_abs_path);
+}
+
+int app_manager_run_ide(const char* target_abs_path) {
+    if (!app_manager_ready || target_abs_path == 0) {
+        ERROR_LOG("app manager ide launch rejected");
+        return -1;
+    }
+
+    DEBUG_LOG("app manager launching ide app");
+    return app_manager_run_path(APPS_IDE_PATH, target_abs_path);
 }

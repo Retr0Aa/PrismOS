@@ -12,6 +12,7 @@
 #define IDE_MAX_TEXT (16U * 1024U)
 #define IDE_MAX_PATH 128U
 #define IDE_TAB_WIDTH 4U
+#define IDE_MAX_VISIBLE_ROWS 128U
 
 typedef struct {
     char path[IDE_MAX_PATH];
@@ -30,6 +31,9 @@ typedef struct {
     uint32_t prev_rows;
     int prev_modified;
     int full_redraw;
+    uint32_t prev_visible_rows;
+    uint32_t prev_row_signature[IDE_MAX_VISIBLE_ROWS];
+    uint8_t prev_row_valid[IDE_MAX_VISIBLE_ROWS];
 } EditorState;
 
 static void copy_limited(char* dst, uint32_t capacity, const char* src) {
@@ -191,6 +195,96 @@ static uint32_t indentation_for_line(const EditorState* state, uint32_t line_sta
     }
 
     return indent;
+}
+
+static int line_prefix_is_whitespace(const EditorState* state, uint32_t line_start, uint32_t index) {
+    uint32_t end = index;
+
+    if (end > state->length) {
+        end = state->length;
+    }
+
+    for (uint32_t i = line_start; i < end; i++) {
+        char c = state->text[i];
+        if (c != ' ' && c != '\t') {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int editor_set_line_indentation(EditorState* state, uint32_t line_start, uint32_t indent_spaces) {
+    uint32_t indent_end = line_start;
+    uint32_t remove_count;
+
+    if (line_start > state->length) {
+        return -1;
+    }
+
+    while (indent_end < state->length) {
+        char c = state->text[indent_end];
+        if (c != ' ' && c != '\t') {
+            break;
+        }
+        indent_end++;
+    }
+
+    remove_count = indent_end - line_start;
+
+    if ((state->length - remove_count + indent_spaces) > IDE_MAX_TEXT) {
+        return -1;
+    }
+
+    if (remove_count > 0U) {
+        for (uint32_t i = indent_end; i <= state->length; i++) {
+            state->text[i - remove_count] = state->text[i];
+        }
+
+        state->length -= remove_count;
+        if (state->cursor > indent_end) {
+            state->cursor -= remove_count;
+        } else if (state->cursor > line_start) {
+            state->cursor = line_start;
+        }
+    }
+
+    if (indent_spaces > 0U) {
+        for (uint32_t i = state->length + 1U; i > line_start; i--) {
+            state->text[i + indent_spaces - 1U] = state->text[i - 1U];
+        }
+
+        for (uint32_t i = 0; i < indent_spaces; i++) {
+            state->text[line_start + i] = ' ';
+        }
+
+        state->length += indent_spaces;
+        if (state->cursor >= line_start) {
+            state->cursor += indent_spaces;
+        }
+    }
+
+    state->text[state->length] = '\0';
+    state->modified = 1;
+    return 0;
+}
+
+static void editor_outdent_for_closing_brace(EditorState* state) {
+    uint32_t line_start = line_start_for_index(state, state->cursor);
+    uint32_t indent;
+
+    if (!line_prefix_is_whitespace(state, line_start, state->cursor)) {
+        return;
+    }
+
+    indent = indentation_for_line(state, line_start);
+    if (indent >= IDE_TAB_WIDTH) {
+        indent -= IDE_TAB_WIDTH;
+    } else {
+        indent = 0U;
+    }
+
+    (void)editor_set_line_indentation(state, line_start, indent);
 }
 
 static void editor_insert_tab(EditorState* state) {
@@ -359,6 +453,31 @@ static void draw_status_bar(uint32_t rows, uint32_t cursor_row, uint32_t cursor_
     console_write_uint(col);
 }
 
+static uint32_t compute_row_signature(const EditorState* state,
+    uint32_t line_start,
+    uint32_t columns,
+    int in_block_comment) {
+    uint32_t pos = line_start;
+    uint32_t col = 0;
+    uint32_t hash = 2166136261U;
+
+    hash ^= columns;
+    hash *= 16777619U;
+    hash ^= in_block_comment ? 1U : 0U;
+    hash *= 16777619U;
+
+    while (pos < state->length && state->text[pos] != '\n' && col < columns) {
+        hash ^= (uint8_t)state->text[pos];
+        hash *= 16777619U;
+        pos++;
+        col++;
+    }
+
+    hash ^= col;
+    hash *= 16777619U;
+    return hash;
+}
+
 const char* keywords[] = {
     "auto", "break", "case", "char", "const", "continue", "default", "do",
     "double", "else", "enum", "extern", "float", "for", "goto", "if",
@@ -444,7 +563,7 @@ static uint32_t consume_string_literal(const EditorState* state, uint32_t start,
     return pos;
 }
 
-static void draw_text_area(const EditorState* state, uint32_t columns, uint32_t rows) {
+static void draw_text_area(EditorState* state, uint32_t columns, uint32_t rows, int force_redraw) {
     uint32_t visible_rows = rows - 2U;
     uint32_t line_start = line_start_for_row(state, state->scroll_row);
     int in_block_comment = 0;
@@ -457,9 +576,19 @@ static void draw_text_area(const EditorState* state, uint32_t columns, uint32_t 
         uint32_t row_y = r + 1U;
         uint32_t col = 0;
         int seen_non_space = 0;
+        uint32_t signature = compute_row_signature(state, line_start, columns, in_block_comment);
+        int row_changed = force_redraw;
 
-        console_clear_row((int)row_y);
-        console_set_cursor(0, (int)row_y);
+        if (r >= IDE_MAX_VISIBLE_ROWS) {
+            row_changed = 1;
+        } else if (!row_changed) {
+            row_changed = (state->prev_row_valid[r] == 0U) || (state->prev_row_signature[r] != signature);
+        }
+
+        if (row_changed) {
+            console_clear_row((int)row_y);
+            console_set_cursor(0, (int)row_y);
+        }
 
         while (pos < line_end && col < columns) {
             uint32_t token_start = pos;
@@ -467,7 +596,9 @@ static void draw_text_area(const EditorState* state, uint32_t columns, uint32_t 
             char c = state->text[pos];
 
             if (in_block_comment) {
-                console_set_color(COLOR_DARK_GRAY, COLOR_BLACK);
+                if (row_changed) {
+                    console_set_color(COLOR_DARK_GRAY, COLOR_BLACK);
+                }
                 token_end = pos;
 
                 while (token_end < line_end) {
@@ -481,21 +612,40 @@ static void draw_text_area(const EditorState* state, uint32_t columns, uint32_t 
                     token_end++;
                 }
 
-                draw_span(state, pos, token_end, &col, columns);
+                if (row_changed) {
+                    draw_span(state, pos, token_end, &col, columns);
+                }
                 pos = token_end;
+                if (!row_changed) {
+                    if (col < columns) {
+                        uint32_t consumed = token_end - token_start;
+                        if (consumed > (columns - col)) {
+                            col = columns;
+                        } else {
+                            col += consumed;
+                        }
+                    }
+                }
                 seen_non_space = 1;
                 continue;
             }
 
             if (c == '/' && (pos + 1U) < line_end && state->text[pos + 1U] == '/') {
-                console_set_color(COLOR_DARK_GRAY, COLOR_BLACK);
-                draw_span(state, pos, line_end, &col, columns);
+                if (row_changed) {
+                    console_set_color(COLOR_DARK_GRAY, COLOR_BLACK);
+                    draw_span(state, pos, line_end, &col, columns);
+                }
                 pos = line_end;
+                if (!row_changed) {
+                    col = columns;
+                }
                 continue;
             }
 
             if (c == '/' && (pos + 1U) < line_end && state->text[pos + 1U] == '*') {
-                console_set_color(COLOR_DARK_GRAY, COLOR_BLACK);
+                if (row_changed) {
+                    console_set_color(COLOR_DARK_GRAY, COLOR_BLACK);
+                }
                 token_end = pos + 2U;
                 in_block_comment = 1;
 
@@ -510,8 +660,20 @@ static void draw_text_area(const EditorState* state, uint32_t columns, uint32_t 
                     token_end++;
                 }
 
-                draw_span(state, pos, token_end, &col, columns);
+                if (row_changed) {
+                    draw_span(state, pos, token_end, &col, columns);
+                }
                 pos = token_end;
+                if (!row_changed) {
+                    if (col < columns) {
+                        uint32_t consumed = token_end - token_start;
+                        if (consumed > (columns - col)) {
+                            col = columns;
+                        } else {
+                            col += consumed;
+                        }
+                    }
+                }
                 seen_non_space = 1;
                 continue;
             }
@@ -522,17 +684,34 @@ static void draw_text_area(const EditorState* state, uint32_t columns, uint32_t 
                     token_end = line_end;
                 }
 
-                console_set_color(COLOR_YELLOW, COLOR_BLACK);
-                draw_span(state, token_start, token_end, &col, columns);
+                if (row_changed) {
+                    console_set_color(COLOR_YELLOW, COLOR_BLACK);
+                    draw_span(state, token_start, token_end, &col, columns);
+                }
                 pos = token_end;
+                if (!row_changed) {
+                    if (col < columns) {
+                        uint32_t consumed = token_end - token_start;
+                        if (consumed > (columns - col)) {
+                            col = columns;
+                        } else {
+                            col += consumed;
+                        }
+                    }
+                }
                 seen_non_space = 1;
                 continue;
             }
 
             if (c == '#' && !seen_non_space) {
-                console_set_color(COLOR_LIGHT_GREEN, COLOR_BLACK);
-                draw_span(state, pos, line_end, &col, columns);
+                if (row_changed) {
+                    console_set_color(COLOR_LIGHT_GREEN, COLOR_BLACK);
+                    draw_span(state, pos, line_end, &col, columns);
+                }
                 pos = line_end;
+                if (!row_changed) {
+                    col = columns;
+                }
                 seen_non_space = 1;
                 continue;
             }
@@ -548,9 +727,21 @@ static void draw_text_area(const EditorState* state, uint32_t columns, uint32_t 
                     token_end++;
                 }
 
-                console_set_color(COLOR_LIGHT_MAGENTA, COLOR_BLACK);
-                draw_span(state, token_start, token_end, &col, columns);
+                if (row_changed) {
+                    console_set_color(COLOR_LIGHT_MAGENTA, COLOR_BLACK);
+                    draw_span(state, token_start, token_end, &col, columns);
+                }
                 pos = token_end;
+                if (!row_changed) {
+                    if (col < columns) {
+                        uint32_t consumed = token_end - token_start;
+                        if (consumed > (columns - col)) {
+                            col = columns;
+                        } else {
+                            col += consumed;
+                        }
+                    }
+                }
                 seen_non_space = 1;
                 continue;
             }
@@ -561,21 +752,35 @@ static void draw_text_area(const EditorState* state, uint32_t columns, uint32_t 
                     token_end++;
                 }
 
-                if (is_keyword_span(state->text, token_start, token_end - token_start)) {
-                    console_set_color(COLOR_LIGHT_CYAN, COLOR_BLACK);
-                } else {
-                    console_set_color(COLOR_LIGHT_GRAY, COLOR_BLACK);
-                }
+                if (row_changed) {
+                    if (is_keyword_span(state->text, token_start, token_end - token_start)) {
+                        console_set_color(COLOR_LIGHT_CYAN, COLOR_BLACK);
+                    } else {
+                        console_set_color(COLOR_LIGHT_GRAY, COLOR_BLACK);
+                    }
 
-                draw_span(state, token_start, token_end, &col, columns);
+                    draw_span(state, token_start, token_end, &col, columns);
+                }
                 pos = token_end;
+                if (!row_changed) {
+                    if (col < columns) {
+                        uint32_t consumed = token_end - token_start;
+                        if (consumed > (columns - col)) {
+                            col = columns;
+                        } else {
+                            col += consumed;
+                        }
+                    }
+                }
                 seen_non_space = 1;
                 continue;
             }
 
             if (c == '{' || c == '}' || c == '(' || c == ')' || c == '[' || c == ']') {
-                console_set_color(COLOR_LIGHT_BLUE, COLOR_BLACK);
-                console_write_char(c);
+                if (row_changed) {
+                    console_set_color(COLOR_LIGHT_BLUE, COLOR_BLACK);
+                    console_write_char(c);
+                }
                 pos++;
                 col++;
                 seen_non_space = 1;
@@ -583,22 +788,31 @@ static void draw_text_area(const EditorState* state, uint32_t columns, uint32_t 
             }
 
             if (c == '+' || c == '-' || c == '*' || c == '/' || c == '=' || c == '%' || c == '!' || c == '&' || c == '|') {
-                console_set_color(COLOR_LIGHT_RED, COLOR_BLACK);
-                console_write_char(c);
+                if (row_changed) {
+                    console_set_color(COLOR_LIGHT_RED, COLOR_BLACK);
+                    console_write_char(c);
+                }
                 pos++;
                 col++;
                 seen_non_space = 1;
                 continue;
             }
 
-            console_set_color(COLOR_LIGHT_GRAY, COLOR_BLACK);
-            console_write_char(c);
+            if (row_changed) {
+                console_set_color(COLOR_LIGHT_GRAY, COLOR_BLACK);
+                console_write_char(c);
+            }
             pos++;
             col++;
 
             if (!is_space_char(c)) {
                 seen_non_space = 1;
             }
+        }
+
+        if (r < IDE_MAX_VISIBLE_ROWS) {
+            state->prev_row_signature[r] = signature;
+            state->prev_row_valid[r] = 1U;
         }
 
         if (line_start >= state->length) {
@@ -613,6 +827,24 @@ static void draw_text_area(const EditorState* state, uint32_t columns, uint32_t 
             }
         }
     }
+
+    if (state->prev_visible_rows > visible_rows) {
+        uint32_t start = visible_rows;
+        uint32_t end = state->prev_visible_rows;
+        if (end > IDE_MAX_VISIBLE_ROWS) {
+            end = IDE_MAX_VISIBLE_ROWS;
+        }
+
+        for (uint32_t r = start; r < end; r++) {
+            state->prev_row_valid[r] = 0U;
+        }
+    }
+
+    if (visible_rows > IDE_MAX_VISIBLE_ROWS) {
+        state->prev_visible_rows = IDE_MAX_VISIBLE_ROWS;
+    } else {
+        state->prev_visible_rows = visible_rows;
+    }
 }
 
 static void draw_editor(EditorState* state, int text_dirty) {
@@ -623,6 +855,7 @@ static void draw_editor(EditorState* state, int text_dirty) {
     int scroll_changed;
     int layout_changed;
     int needs_full_text;
+    int force_row_redraw;
 
     if (columns == 0U || rows < 3U) {
         return;
@@ -638,10 +871,11 @@ static void draw_editor(EditorState* state, int text_dirty) {
         || layout_changed
         || (state->prev_modified != state->modified)
         || (state->prev_length != state->length);
+    force_row_redraw = state->full_redraw || scroll_changed || layout_changed;
 
     if (needs_full_text) {
         draw_title_bar(state);
-        draw_text_area(state, columns, rows);
+        draw_text_area(state, columns, rows, force_row_redraw);
         state->full_redraw = 0;
         state->prev_modified = state->modified;
         state->prev_length = state->length;
@@ -852,6 +1086,11 @@ int ide_app_run(const char* abs_path) {
     state.prev_rows = 0xFFFFFFFFU;
     state.prev_modified = -1;
     state.full_redraw = 1;
+    state.prev_visible_rows = 0;
+    for (uint32_t i = 0; i < IDE_MAX_VISIBLE_ROWS; i++) {
+        state.prev_row_signature[i] = 0U;
+        state.prev_row_valid[i] = 0U;
+    }
     state.text[0] = '\0';
 
     if (vfs_read_file(abs_path, state.text, sizeof(state.text), &size) == 0) {
@@ -881,6 +1120,11 @@ int ide_app_run(const char* abs_path) {
                 text_dirty = 1;
             } else if (event.character == '\t') {
                 editor_insert_tab(&state);
+                state.preferred_col = column_for_index(&state, state.cursor);
+                text_dirty = 1;
+            } else if (event.character == '}') {
+                editor_outdent_for_closing_brace(&state);
+                editor_insert(&state, event.character);
                 state.preferred_col = column_for_index(&state, state.cursor);
                 text_dirty = 1;
             } else if (event.character >= 32 && event.character <= 126) {

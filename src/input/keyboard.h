@@ -29,4 +29,7 @@ void keyboard_init(void);
  * instead of busy-polling the hardware port. */
 KeyEvent keyboard_read_event(void);
 
+/* Return the next queued event if available, otherwise KEY_EVENT_NONE. */
+KeyEvent keyboard_poll_event(void);
+
 #endif

@@ -9,6 +9,7 @@
 
 #define EDITOR_MAX_TEXT (16U * 1024U)
 #define EDITOR_MAX_PATH 128U
+#define EDITOR_MAX_VISIBLE_ROWS 128U
 
 typedef struct {
     char path[EDITOR_MAX_PATH];
@@ -27,6 +28,9 @@ typedef struct {
     uint32_t prev_rows;
     int prev_modified;
     int full_redraw;
+    uint32_t prev_visible_rows;
+    uint32_t prev_row_signature[EDITOR_MAX_VISIBLE_ROWS];
+    uint8_t prev_row_valid[EDITOR_MAX_VISIBLE_ROWS];
 } EditorState;
 
 static void copy_limited(char* dst, uint32_t capacity, const char* src) {
@@ -274,7 +278,27 @@ static void draw_status_bar(uint32_t rows, uint32_t cursor_row, uint32_t cursor_
     console_write_uint(col);
 }
 
-static void draw_text_area(const EditorState* state, uint32_t columns, uint32_t rows) {
+static uint32_t compute_row_signature(const EditorState* state, uint32_t line_start, uint32_t columns) {
+    uint32_t pos = line_start;
+    uint32_t col = 0;
+    uint32_t hash = 2166136261U;
+
+    hash ^= columns;
+    hash *= 16777619U;
+
+    while (pos < state->length && state->text[pos] != '\n' && col < columns) {
+        hash ^= (uint8_t)state->text[pos];
+        hash *= 16777619U;
+        pos++;
+        col++;
+    }
+
+    hash ^= col;
+    hash *= 16777619U;
+    return hash;
+}
+
+static void draw_text_area(EditorState* state, uint32_t columns, uint32_t rows, int force_redraw) {
     uint32_t visible_rows = rows - 2U;
     uint32_t line_start = line_start_for_row(state, state->scroll_row);
 
@@ -284,14 +308,29 @@ static void draw_text_area(const EditorState* state, uint32_t columns, uint32_t 
         uint32_t pos = line_start;
         uint32_t row_y = r + 1U;
         uint32_t col = 0;
+        uint32_t signature = compute_row_signature(state, line_start, columns);
+        int row_changed = force_redraw;
 
-        console_clear_row((int)row_y);
-        console_set_cursor(0, (int)row_y);
+        if (r >= EDITOR_MAX_VISIBLE_ROWS) {
+            row_changed = 1;
+        } else if (!row_changed) {
+            row_changed = (state->prev_row_valid[r] == 0U) || (state->prev_row_signature[r] != signature);
+        }
 
-        while (pos < state->length && state->text[pos] != '\n' && col < columns) {
-            console_write_char(state->text[pos]);
-            pos++;
-            col++;
+        if (row_changed) {
+            console_clear_row((int)row_y);
+            console_set_cursor(0, (int)row_y);
+
+            while (pos < state->length && state->text[pos] != '\n' && col < columns) {
+                console_write_char(state->text[pos]);
+                pos++;
+                col++;
+            }
+
+            if (r < EDITOR_MAX_VISIBLE_ROWS) {
+                state->prev_row_signature[r] = signature;
+                state->prev_row_valid[r] = 1U;
+            }
         }
 
         if (line_start >= state->length) {
@@ -306,6 +345,24 @@ static void draw_text_area(const EditorState* state, uint32_t columns, uint32_t 
             }
         }
     }
+
+    if (state->prev_visible_rows > visible_rows) {
+        uint32_t start = visible_rows;
+        uint32_t end = state->prev_visible_rows;
+        if (end > EDITOR_MAX_VISIBLE_ROWS) {
+            end = EDITOR_MAX_VISIBLE_ROWS;
+        }
+
+        for (uint32_t r = start; r < end; r++) {
+            state->prev_row_valid[r] = 0U;
+        }
+    }
+
+    if (visible_rows > EDITOR_MAX_VISIBLE_ROWS) {
+        state->prev_visible_rows = EDITOR_MAX_VISIBLE_ROWS;
+    } else {
+        state->prev_visible_rows = visible_rows;
+    }
 }
 
 static void draw_editor(EditorState* state, int text_dirty) {
@@ -316,6 +373,7 @@ static void draw_editor(EditorState* state, int text_dirty) {
     int scroll_changed;
     int layout_changed;
     int needs_full_text;
+    int force_row_redraw;
 
     if (columns == 0U || rows < 3U) {
         return;
@@ -331,10 +389,11 @@ static void draw_editor(EditorState* state, int text_dirty) {
         || layout_changed
         || (state->prev_modified != state->modified)
         || (state->prev_length != state->length);
+    force_row_redraw = state->full_redraw || scroll_changed || layout_changed;
 
     if (needs_full_text) {
         draw_title_bar(state);
-        draw_text_area(state, columns, rows);
+        draw_text_area(state, columns, rows, force_row_redraw);
         state->full_redraw = 0;
         state->prev_modified = state->modified;
         state->prev_length = state->length;
@@ -445,6 +504,11 @@ int editor_app_run(const char* abs_path) {
     state.prev_rows = 0xFFFFFFFFU;
     state.prev_modified = -1;
     state.full_redraw = 1;
+    state.prev_visible_rows = 0;
+    for (uint32_t i = 0; i < EDITOR_MAX_VISIBLE_ROWS; i++) {
+        state.prev_row_signature[i] = 0U;
+        state.prev_row_valid[i] = 0U;
+    }
     state.text[0] = '\0';
 
     if (vfs_read_file(abs_path, state.text, sizeof(state.text), &size) == 0) {

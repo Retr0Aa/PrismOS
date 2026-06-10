@@ -7,7 +7,7 @@
 #include "input/keyboard.h"
 
 #define BCVM_STACK_MAX 256U
-#define BCVM_LOCALS_MAX 64U
+#define BCVM_LOCALS_MAX 512U
 #define BCVM_CALL_DEPTH_MAX 32U
 #define BCVM_MAX_STEPS 200000U
 #define BCVM_INPUT_MAX 127U
@@ -32,6 +32,9 @@ static uint16_t vm_heap_array_length[BCVM_HEAP_ARRAY_MAX];
 static uint8_t vm_heap_array_used[BCVM_HEAP_ARRAY_MAX];
 static uint16_t vm_heap_array_next_offset = 0;
 static uint8_t vm_heap_array_next_slot = 0;
+static int32_t vm_stack[BCVM_STACK_MAX];
+static int32_t vm_locals[BCVM_CALL_DEPTH_MAX + 1U][BCVM_LOCALS_MAX];
+static uint32_t vm_call_return_pc[BCVM_CALL_DEPTH_MAX];
 static char vm_file_path_buffer[BCVM_FILE_PATH_MAX];
 static char vm_file_text_buffer[BCVM_FILE_TEXT_MAX + 1U];
 
@@ -237,6 +240,19 @@ static void vm_erase_last_echoed_char(void) {
     console_set_cursor(x - 1, y);
 }
 
+static int vm_event_requests_quit(KeyEvent event) {
+    return event.type == KEY_EVENT_CHARACTER && event.character == 27;
+}
+
+static int vm_poll_quit_request(void) {
+    KeyEvent event = keyboard_poll_event();
+    if (event.type == KEY_EVENT_NONE) {
+        return 0;
+    }
+
+    return vm_event_requests_quit(event);
+}
+
 static int32_t vm_read_int(void) {
     char buffer[32];
     uint32_t length = 0;
@@ -365,13 +381,14 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
     bcvm_image_header_t header;
     const uint8_t* code;
     const uint8_t* data;
-    int32_t stack[BCVM_STACK_MAX] = {0};
-    int32_t locals[BCVM_CALL_DEPTH_MAX + 1U][BCVM_LOCALS_MAX];
-    uint32_t call_return_pc[BCVM_CALL_DEPTH_MAX];
+    int32_t* stack = vm_stack;
+    int32_t (*locals)[BCVM_LOCALS_MAX] = vm_locals;
+    uint32_t* call_return_pc = vm_call_return_pc;
     uint32_t sp = 0;
     uint32_t call_depth = 0;
     uint32_t pc = 0;
     uint32_t steps = 0;
+    int fullscreen_enabled = 0;
 
     (void)args;
     vm_input_length = 0;
@@ -393,8 +410,13 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
     }
 
     {
+        volatile int32_t* init_stack = &stack[0];
         volatile int32_t* init_locals = &locals[0][0];
         volatile uint32_t* init_returns = &call_return_pc[0];
+
+        for (uint32_t i = 0; i < BCVM_STACK_MAX; i++) {
+            init_stack[i] = 0;
+        }
 
         for (uint32_t i = 0; i < (BCVM_CALL_DEPTH_MAX + 1U) * BCVM_LOCALS_MAX; i++) {
             init_locals[i] = 0;
@@ -411,9 +433,23 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
 
     DEBUG_LOG("BCVM started");
 
-    while (pc < header.code_size && steps < BCVM_MAX_STEPS) {
+    while (pc < header.code_size) {
         uint8_t opcode = code[pc++];
         steps++;
+
+        if (!fullscreen_enabled && steps >= BCVM_MAX_STEPS) {
+            break;
+        }
+
+        if (fullscreen_enabled && steps == 0xFFFFFFFFU) {
+            steps = 0;
+        }
+
+        if (fullscreen_enabled && vm_poll_quit_request()) {
+            console_set_cursor_visible(1);
+            DEBUG_LOG("BCVM fullscreen quit shortcut triggered");
+            return 0;
+        }
 
         switch (opcode) {
             case BCVM_OP_PUSH_I32: {
@@ -427,13 +463,14 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
                 break;
             }
             case BCVM_OP_LOAD_LOCAL: {
-                uint8_t index;
-                if (pc >= header.code_size || sp >= BCVM_STACK_MAX) {
+                uint16_t index;
+                if (pc + 2U > header.code_size || sp >= BCVM_STACK_MAX) {
                     ERROR_LOG("BCVM LOAD_LOCAL fault");
                     return -1;
                 }
 
-                index = code[pc++];
+                index = read_u16le(&code[pc]);
+                pc += 2U;
                 if (index >= BCVM_LOCALS_MAX) {
                     return -1;
                 }
@@ -442,13 +479,14 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
                 break;
             }
             case BCVM_OP_STORE_LOCAL: {
-                uint8_t index;
-                if (pc >= header.code_size || sp == 0U) {
+                uint16_t index;
+                if (pc + 2U > header.code_size || sp == 0U) {
                     ERROR_LOG("BCVM STORE_LOCAL fault");
                     return -1;
                 }
 
-                index = code[pc++];
+                index = read_u16le(&code[pc]);
+                pc += 2U;
                 if (index >= BCVM_LOCALS_MAX) {
                     return -1;
                 }
@@ -603,7 +641,7 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
                 pc += 4U;
                 arg_count = code[pc++];
 
-                if (target >= header.code_size || arg_count > BCVM_LOCALS_MAX || sp < arg_count) {
+                if (target >= header.code_size || sp < arg_count) {
                     return -1;
                 }
 
@@ -1007,6 +1045,52 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
                 stack[sp++] = exists;
                 break;
             }
+            case BCVM_OP_SET_FULLSCREEN: {
+                int32_t enabled;
+
+                if (sp == 0U) {
+                    return -1;
+                }
+
+                enabled = stack[--sp];
+                fullscreen_enabled = enabled != 0;
+                console_set_cursor_visible(fullscreen_enabled ? 0 : 1);
+                break;
+            }
+            case BCVM_OP_APP_SHOULD_QUIT:
+                if (sp >= BCVM_STACK_MAX) {
+                    return -1;
+                }
+                stack[sp++] = vm_poll_quit_request() ? 1 : 0;
+                break;
+            case BCVM_OP_APP_EXIT:
+                console_set_cursor_visible(1);
+                DEBUG_LOG("BCVM app exit requested");
+                return 0;
+            case BCVM_OP_DRAW_PIXEL: {
+                int32_t x;
+                int32_t y;
+                int32_t color;
+
+                if (sp < 3U) {
+                    return -1;
+                }
+
+                color = stack[--sp];
+                y = stack[--sp];
+                x = stack[--sp];
+
+                if (color < 0) {
+                    color = 0;
+                }
+
+                if (color > 15) {
+                    color = 15;
+                }
+
+                console_draw_pixel((int)x, (int)y, (VGA_Color)color);
+                break;
+            }
             case BCVM_OP_POP:
                 if (sp == 0U) {
                     return -1;
@@ -1020,6 +1104,7 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
                 }
 
                 if (call_depth == 0U) {
+                    console_set_cursor_visible(1);
                     DEBUG_LOG("BCVM finished");
                     return 0;
                 }
@@ -1035,6 +1120,7 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
                 }
                 break;
             case BCVM_OP_HALT:
+                console_set_cursor_visible(1);
                 DEBUG_LOG("BCVM finished");
                 return 0;
             default:

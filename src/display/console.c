@@ -518,6 +518,20 @@ void console_set_color(VGA_Color fg, VGA_Color bg) {
     console.bg_color = bg;
 }
 
+void console_set_cursor_visible(int visible) {
+    if (!console.ready) {
+        return;
+    }
+
+    if (visible) {
+        console.cursor_visible = 1;
+        console_draw_cursor();
+    } else {
+        console_erase_cursor();
+        console.cursor_visible = 0;
+    }
+}
+
 void console_set_cursor(int x, int y) {
     const int columns = console_columns();
     const int rows = console_rows();
@@ -528,6 +542,14 @@ void console_set_cursor(int x, int y) {
         console.y = y;
         console_draw_cursor();
     }
+}
+
+void console_draw_pixel(int x, int y, VGA_Color color) {
+    if (!console.ready || x < 0 || y < 0) {
+        return;
+    }
+
+    framebuffer_write_pixel((uint32_t)x, (uint32_t)y, framebuffer_make_pixel(color));
 }
 
 void console_tick(void) {

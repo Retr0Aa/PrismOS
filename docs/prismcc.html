@@ -209,6 +209,40 @@ print_int(count);</code></div>
 }</code></div>
       </div>
 
+      <div class="api-item">
+        <h3 class="api-title"><code>set_fullscreen(int enabled)</code></h3>
+        <p class="api-meta">Enables or disables fullscreen app mode. In fullscreen mode, the VM listens for <code>Esc</code> as a global quit shortcut.</p>
+        <p>Use this at app start to hide the text cursor and switch to framebuffer-style drawing updates.</p>
+        <div class="api-example"><code>set_fullscreen(1);
+// ... draw loop ...
+set_fullscreen(0);</code></div>
+      </div>
+
+      <div class="api-item">
+        <h3 class="api-title"><code>draw_pixel(int x, int y, int color)</code></h3>
+        <p class="api-meta">Draws one pixel at framebuffer coordinates <code>(x, y)</code> using palette color <code>0..15</code>.</p>
+        <p>Use this for custom software rendering, pixel art, and basic visual effects.</p>
+        <div class="api-example"><code>draw_pixel(100, 80, 12);</code></div>
+      </div>
+
+      <div class="api-item">
+        <h3 class="api-title"><code>app_should_quit()</code></h3>
+        <p class="api-meta">Returns <code>1</code> when a queued quit shortcut event is available, otherwise <code>0</code>.</p>
+        <p>Use this inside animation loops to exit cleanly without forcing the global shortcut behavior.</p>
+        <div class="api-example"><code>while (app_should_quit() == 0) {
+    // render frame
+}</code></div>
+      </div>
+
+      <div class="api-item">
+        <h3 class="api-title"><code>app_exit()</code></h3>
+        <p class="api-meta">Exits the running app immediately and returns control to the shell.</p>
+        <p>Use this for explicit termination paths such as menu commands or fatal runtime conditions.</p>
+        <div class="api-example"><code>if (done == 1) {
+    app_exit();
+}</code></div>
+      </div>
+
       <p class="note">Path strings are passed directly to VFS operations in the VM.</p>
     </div>
 
@@ -231,7 +265,7 @@ print_int(count);</code></div>
             <li>Source size: 32 KiB</li>
             <li>Code size: 48 KiB</li>
             <li>Data size: 16 KiB</li>
-            <li>Max locals: 64</li>
+            <li>Max locals: 512</li>
             <li>Max functions: 64</li>
             <li>Max call patch sites: 256</li>
           </ul>

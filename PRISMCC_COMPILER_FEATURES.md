@@ -133,7 +133,7 @@ Compiler-side limits:
 - Source size: 32 KiB
 - Code size: 48 KiB
 - Data size: 16 KiB
-- Max locals: 64
+- Max locals: 512
 - Max functions: 64
 - Max call patch sites: 256
 

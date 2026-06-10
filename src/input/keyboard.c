@@ -156,3 +156,12 @@ KeyEvent keyboard_read_event(void)
     }
     return kb_queue_pop();
 }
+
+KeyEvent keyboard_poll_event(void)
+{
+    if (kb_queue_empty()) {
+        return (KeyEvent){KEY_EVENT_NONE, 0};
+    }
+
+    return kb_queue_pop();
+}

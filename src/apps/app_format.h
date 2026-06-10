@@ -18,7 +18,7 @@ typedef struct {
 #define PRISM_APP_HEADER_SIZE 20U
 
 #define BCVM_MAGIC 0x4D564342U /* 'BCVM' */
-#define BCVM_VERSION 1U
+#define BCVM_VERSION 2U
 #define BCVM_IMAGE_HEADER_SIZE 20U
 
 typedef struct {
@@ -73,6 +73,10 @@ enum {
     BCVM_OP_FILE_APPEND = 0x28,
     BCVM_OP_FILE_EXISTS = 0x29,
     BCVM_OP_MOD = 0x2A,
+    BCVM_OP_SET_FULLSCREEN = 0x2B,
+    BCVM_OP_APP_SHOULD_QUIT = 0x2C,
+    BCVM_OP_APP_EXIT = 0x2D,
+    BCVM_OP_DRAW_PIXEL = 0x2E,
 };
 
 #endif

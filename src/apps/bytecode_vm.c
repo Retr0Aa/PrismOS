@@ -761,6 +761,13 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
             case BCVM_OP_PRINT_NL:
                 console_write_char('\n');
                 break;
+            case BCVM_OP_PRINT_CHAR:
+                if (sp == 0U) {
+                    return -1;
+                }
+
+                console_write_char((char)(stack[--sp] & 0xFF));
+                break;
             case BCVM_OP_READ_INT:
                 if (sp >= BCVM_STACK_MAX) {
                     return -1;

@@ -77,6 +77,7 @@ enum {
     BCVM_OP_APP_SHOULD_QUIT = 0x2C,
     BCVM_OP_APP_EXIT = 0x2D,
     BCVM_OP_DRAW_PIXEL = 0x2E,
+    BCVM_OP_PRINT_CHAR = 0x2F,
 };
 
 #endif

@@ -14,10 +14,12 @@
 typedef enum {
     TOK_EOF = 0,
     TOK_INT,
+    TOK_CHAR,
     TOK_MAIN,
     TOK_RETURN,
     TOK_PRINT,
     TOK_PRINT_INT,
+    TOK_PRINT_CHAR,
     TOK_IDENTIFIER,
     TOK_NUMBER,
     TOK_STRING,
@@ -110,10 +112,12 @@ static void lexer_skip_ws(Lexer* lx) {
 
 static TokenType keyword_type(const char* text) {
     if (strcmp(text, "int") == 0) return TOK_INT;
+    if (strcmp(text, "char") == 0) return TOK_CHAR;
     if (strcmp(text, "main") == 0) return TOK_MAIN;
     if (strcmp(text, "return") == 0) return TOK_RETURN;
     if (strcmp(text, "print") == 0) return TOK_PRINT;
     if (strcmp(text, "print_int") == 0) return TOK_PRINT_INT;
+    if (strcmp(text, "print_char") == 0) return TOK_PRINT_CHAR;
     return TOK_IDENTIFIER;
 }
 
@@ -169,6 +173,39 @@ static Token lexer_next(Lexer* lx) {
 
                 tk.text[out] = '\0';
                 tk.type = TOK_STRING;
+                return tk;
+            }
+            case '\'': {
+                char sc;
+
+                if (lx->pos >= lx->len) {
+                    fail_at_line(tk.line, "unterminated char literal");
+                }
+
+                if (lx->src[lx->pos] == '\'') {
+                    fail_at_line(tk.line, "char literal must contain one character");
+                }
+
+                sc = lx->src[lx->pos++];
+                if (sc == '\\') {
+                    if (lx->pos >= lx->len) {
+                        fail_at_line(tk.line, "unterminated char literal escape");
+                    }
+
+                    sc = lx->src[lx->pos++];
+                    if (sc == 'n') sc = '\n';
+                    else if (sc == 't') sc = '\t';
+                    else if (sc == '\\') sc = '\\';
+                    else if (sc == '\'') sc = '\'';
+                }
+
+                if (lx->pos >= lx->len || lx->src[lx->pos] != '\'') {
+                    fail_at_line(tk.line, "char literal must contain one character");
+                }
+
+                lx->pos++;
+                tk.type = TOK_NUMBER;
+                tk.number = (int32_t)(uint8_t)sc;
                 return tk;
             }
             default:
@@ -339,13 +376,16 @@ static void parse_expression(Compiler* c) {
 }
 
 static void parse_statement(Compiler* c, int* saw_return) {
-    if (c->lexer.current.type == TOK_INT) {
+    if (c->lexer.current.type == TOK_INT || c->lexer.current.type == TOK_CHAR) {
         Token ident;
         uint8_t idx;
+        const char* type_name = c->lexer.current.type == TOK_CHAR ? "char" : "int";
         next_token(c);
 
         if (c->lexer.current.type != TOK_IDENTIFIER) {
-            fail_at_line(c->lexer.current.line, "expected identifier after int");
+            char error_msg[64];
+            snprintf(error_msg, sizeof(error_msg), "expected identifier after %s", type_name);
+            fail_at_line(c->lexer.current.line, error_msg);
         }
         ident = c->lexer.current;
         next_token(c);
@@ -398,6 +438,16 @@ static void parse_statement(Compiler* c, int* saw_return) {
         expect(c, TOK_SEMI, "expected ';' after print_int");
         emit_u8(c, BCVM_OP_PRINT_INT);
         emit_u8(c, BCVM_OP_PRINT_NL);
+        return;
+    }
+
+    if (c->lexer.current.type == TOK_PRINT_CHAR) {
+        next_token(c);
+        expect(c, TOK_LPAREN, "expected '(' after print_char");
+        parse_expression(c);
+        expect(c, TOK_RPAREN, "expected ')' after print_char argument");
+        expect(c, TOK_SEMI, "expected ';' after print_char");
+        emit_u8(c, BCVM_OP_PRINT_CHAR);
         return;
     }
 

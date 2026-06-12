@@ -20,10 +20,12 @@
 typedef enum {
     TOK_EOF = 0,
     TOK_INT,
+    TOK_CHAR_TYPE,
     TOK_MAIN,
     TOK_RETURN,
     TOK_PRINT,
     TOK_PRINT_INT,
+    TOK_PRINT_CHAR,
     TOK_PRINT_COLOR,
     TOK_READ_TEXT,
     TOK_PRINT_INPUT,
@@ -479,6 +481,10 @@ static TokenType keyword_type(const char* text) {
         return TOK_INT;
     }
 
+    if (string_equals(text, "char")) {
+        return TOK_CHAR_TYPE;
+    }
+
     if (string_equals(text, "main")) {
         return TOK_MAIN;
     }
@@ -493,6 +499,10 @@ static TokenType keyword_type(const char* text) {
 
     if (string_equals(text, "print_int")) {
         return TOK_PRINT_INT;
+    }
+
+    if (string_equals(text, "print_char")) {
+        return TOK_PRINT_CHAR;
     }
 
     if (string_equals(text, "print_color")) {
@@ -754,6 +764,48 @@ static Token lexer_next(Lexer* lexer, const char** out_error) {
 
                 *out_error = "unterminated string";
                 return token;
+            case '\'': {
+                char sc;
+
+                if (lexer->position >= lexer->length) {
+                    *out_error = "unterminated char literal";
+                    return token;
+                }
+
+                if (lexer->src[lexer->position] == '\'') {
+                    *out_error = "char literal must contain one character";
+                    return token;
+                }
+
+                sc = lexer->src[lexer->position++];
+                if (sc == '\\') {
+                    if (lexer->position >= lexer->length) {
+                        *out_error = "unterminated char literal escape";
+                        return token;
+                    }
+
+                    sc = lexer->src[lexer->position++];
+                    if (sc == 'n') {
+                        sc = '\n';
+                    } else if (sc == 't') {
+                        sc = '\t';
+                    } else if (sc == '\\') {
+                        sc = '\\';
+                    } else if (sc == '\'') {
+                        sc = '\'';
+                    }
+                }
+
+                if (lexer->position >= lexer->length || lexer->src[lexer->position] != '\'') {
+                    *out_error = "char literal must contain one character";
+                    return token;
+                }
+
+                lexer->position++;
+                token.type = TOK_NUMBER;
+                token.number = (int32_t)(uint8_t)sc;
+                return token;
+            }
             default:
                 *out_error = "unexpected character";
                 return token;
@@ -1169,12 +1221,20 @@ static int parse_int_declaration(PrismCompiler* compiler, int expect_semicolon) 
     return parse_declaration(compiler, LOCAL_TYPE_INT, TOK_INT, "expected identifier after int", expect_semicolon, 0);
 }
 
+static int parse_char_declaration(PrismCompiler* compiler, int expect_semicolon) {
+    return parse_declaration(compiler, LOCAL_TYPE_INT, TOK_CHAR_TYPE, "expected identifier after char", expect_semicolon, 0);
+}
+
 static int parse_string_declaration(PrismCompiler* compiler, int expect_semicolon) {
     return parse_declaration(compiler, LOCAL_TYPE_STRING, TOK_STRING_TYPE, "expected identifier after string", expect_semicolon, 0);
 }
 
 static int parse_for_int_declaration(PrismCompiler* compiler) {
     return parse_declaration(compiler, LOCAL_TYPE_INT, TOK_INT, "expected identifier after int", 0, 1);
+}
+
+static int parse_for_char_declaration(PrismCompiler* compiler) {
+    return parse_declaration(compiler, LOCAL_TYPE_INT, TOK_CHAR_TYPE, "expected identifier after char", 0, 1);
 }
 
 static int parse_for_string_declaration(PrismCompiler* compiler) {
@@ -1267,8 +1327,8 @@ static int parse_struct_definition(PrismCompiler* compiler) {
         TokenType field_type_token = compiler->lexer.current.type;
         LocalType field_type;
 
-        if (field_type_token != TOK_INT && field_type_token != TOK_STRING_TYPE) {
-            compiler->error = "struct fields must be int or string";
+        if (field_type_token != TOK_INT && field_type_token != TOK_CHAR_TYPE && field_type_token != TOK_STRING_TYPE) {
+            compiler->error = "struct fields must be int, char or string";
             return -1;
         }
 
@@ -1551,6 +1611,14 @@ static int parse_for_clause_item(PrismCompiler* compiler, int allow_declaration)
             return -1;
         }
         return parse_for_int_declaration(compiler);
+    }
+
+    if (compiler->lexer.current.type == TOK_CHAR_TYPE) {
+        if (!allow_declaration) {
+            compiler->error = "for increment does not support declaration";
+            return -1;
+        }
+        return parse_for_char_declaration(compiler);
     }
 
     if (compiler->lexer.current.type == TOK_STRING_TYPE) {
@@ -2283,6 +2351,10 @@ static int parse_statement(PrismCompiler* compiler, int* saw_return) {
         return parse_int_declaration(compiler, 1);
     }
 
+    if (compiler->lexer.current.type == TOK_CHAR_TYPE) {
+        return parse_char_declaration(compiler, 1);
+    }
+
     if (compiler->lexer.current.type == TOK_STRING_TYPE) {
         return parse_string_declaration(compiler, 1);
     }
@@ -2349,6 +2421,35 @@ static int parse_statement(PrismCompiler* compiler, int* saw_return) {
         }
 
         return emit_u8(compiler, BCVM_OP_PRINT_NL);
+    }
+
+    if (compiler->lexer.current.type == TOK_PRINT_CHAR) {
+        uint8_t char_arg_type;
+
+        next_token(compiler);
+        if (expect(compiler, TOK_LPAREN, "expected '(' after print_char") != 0) {
+            return -1;
+        }
+
+        char_arg_type = guess_expression_type(compiler);
+        if (parse_expression(compiler) != 0) {
+            return -1;
+        }
+
+        if (char_arg_type != (uint8_t)LOCAL_TYPE_INT) {
+            compiler->error = "print_char argument must be int";
+            return -1;
+        }
+
+        if (expect(compiler, TOK_RPAREN, "expected ')' after print_char argument") != 0) {
+            return -1;
+        }
+
+        if (expect(compiler, TOK_SEMI, "expected ';' after print_char") != 0) {
+            return -1;
+        }
+
+        return emit_u8(compiler, BCVM_OP_PRINT_CHAR);
     }
 
     if (compiler->lexer.current.type == TOK_PRINT_COLOR) {
@@ -2718,8 +2819,8 @@ static int parse_function(PrismCompiler* compiler) {
     TokenType return_type = compiler->lexer.current.type;
     LocalType return_local_type = return_type == TOK_STRING_TYPE ? LOCAL_TYPE_STRING : LOCAL_TYPE_INT;
 
-    if (return_type != TOK_INT && return_type != TOK_STRING_TYPE) {
-        compiler->error = "expected int or string at function start";
+    if (return_type != TOK_INT && return_type != TOK_CHAR_TYPE && return_type != TOK_STRING_TYPE) {
+        compiler->error = "expected int, char or string at function start";
         return -1;
     }
 
@@ -2748,8 +2849,8 @@ static int parse_function(PrismCompiler* compiler) {
             LocalType param_type;
             TokenType param_token = compiler->lexer.current.type;
 
-            if (param_token != TOK_INT && param_token != TOK_STRING_TYPE) {
-                compiler->error = "expected int or string parameter type";
+            if (param_token != TOK_INT && param_token != TOK_CHAR_TYPE && param_token != TOK_STRING_TYPE) {
+                compiler->error = "expected int, char or string parameter type";
                 return -1;
             }
 
@@ -2842,8 +2943,10 @@ static int parse_program(PrismCompiler* compiler) {
             continue;
         }
 
-        if (compiler->lexer.current.type != TOK_INT && compiler->lexer.current.type != TOK_STRING_TYPE) {
-            compiler->error = "top-level items must be int or string methods";
+        if (compiler->lexer.current.type != TOK_INT
+            && compiler->lexer.current.type != TOK_CHAR_TYPE
+            && compiler->lexer.current.type != TOK_STRING_TYPE) {
+            compiler->error = "top-level items must be int, char or string methods";
             return -1;
         }
 

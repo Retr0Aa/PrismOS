@@ -14,6 +14,7 @@ PrismCC compiles a C-like subset into BCVM bytecode packaged in the Prism app fo
 ## Language: Supported Types
 
 - `int`
+- `char` (int-backed single-character value)
 - `string`
 - `int[N]` fixed-size arrays
 - `struct` types with `int`/`string` fields
@@ -27,6 +28,7 @@ Notes:
 
 - User-defined functions are supported.
 - Function parameters are supported (`int` and `string`).
+- Function parameters are supported (`int`, `char` and `string`).
 - Return values are supported.
 - Method overloading is supported by signature:
   - same name
@@ -48,6 +50,8 @@ Notes:
 - Variable declarations:
   - `int x;`
   - `int x = 5;`
+  - `char c;`
+  - `char c = 'A';`
   - `string s;`
   - `string s = "hi";`
   - `int a[8];`
@@ -72,15 +76,17 @@ Notes:
 - Function call expressions
 - Parenthesized expressions
 - String literals
+- Char literals with single quotes (`'A'`, `'\n'`, `'\''`)
 - Array element reads (`a[i]`)
 - Struct field reads (`p.name`, `p.age`)
 
 ## Structs
 
 - Type definition syntax:
-  - `struct Person { int age; string name; };`
+  - `struct Person { int age; char initial; string name; };`
 - Field types currently supported in structs:
   - `int`
+  - `char`
   - `string`
 - Struct variables are value containers backed by VM heap arrays.
 - Struct initializers are not supported yet (declare first, then assign fields).
@@ -93,6 +99,9 @@ Notes:
     - prints string when expression is string
   - prints newline after output
 - `print_int(expr)`
+- `print_char(expr)`
+  - prints one character from the low byte of int expression
+  - does not print newline
 - `print_color(colorExpr, stringExpr)`
 - `read_text()`
 - `read_text(promptStringExpr)`

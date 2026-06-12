@@ -8,6 +8,11 @@ int std_print_number(int value) {
     return 0;
 }
 
+int std_print_char(char value) {
+    print_char(value);
+    return 0;
+}
+
 int std_print_color_line(int color, string value) {
     print_color(color, value);
     return 0;

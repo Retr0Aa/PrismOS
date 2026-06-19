@@ -1,15 +1,17 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PrismOS Docs</title>
+  <title>PrismOS</title>
   <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
   <header>
-    <h1>PrismOS Docs</h1>
-    <p>Reference material for PrismOS and the in-OS PrismCC compiler</p>
+    <h1>PrismOS</h1>
+    <p>Hobby Operating System made by Georgi Georgiev and Alexander Buchkov</p>
   </header>
 
   <nav>
@@ -19,6 +21,25 @@
   </nav>
 
   <div class="container">
+    <div class="card card-warning" id="release">
+      <h2>Alpha 0.1 release</h2>
+
+      <p>First alpha release of PrismOS is here! Main features include:</p>
+      <ul>
+        <li>Basic shell functionality</li>
+        <li>Support for the PrismCC compiler</li>
+        <li>Initial implementation of the BCVM runtime</li>
+      </ul>
+
+      <a href="https://github.com/Retr0Aa/PrismOS/releases/tag/a0.1" target="_blank" rel="noreferrer">
+        <button class="btn">GitHub Release</button>
+      </a>
+    </div>
+    <div class="card" id="screenshots">
+      <h2>Screenshots</h2>
+
+      <img src="screenshot-1.png" alt="PrismOS Shell" class="screenshot">
+    </div>
     <div class="card" id="about">
       <h2>PrismCC</h2>
       <p>
@@ -33,25 +54,11 @@
         <a href="prismcc.html">Open PrismCC Reference →</a>
       </p>
     </div>
-
-    <div class="card">
-      <h2>What It Supports</h2>
-      <p>
-        Functions, overloads, <code>int</code> and <code>string</code> values, fixed-size
-        <code>int[N]</code> arrays, control flow, arithmetic, comparisons, string helpers,
-        console I/O, and file I/O.
-      </p>
-    </div>
-
-    <div class="card">
-      <h2>Shell Workflow</h2>
-      <p>
-        Compile with <code>cc &lt;input.c&gt; &lt;output.app&gt;</code> inside PrismOS, then run the
-        app with <code>app-run</code>.
-      </p>
-    </div>
   </div>
 
-  <div class="footer">© 2026 PrismOS Project</div>
+  <footer>
+    <div class="footer">© 2026 PrismOS Project</div>
+  </footer>
 </body>
+
 </html>

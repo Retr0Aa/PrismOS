@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PrismCC Reference</title>
   <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
   <header>
     <h1>PrismCC Reference</h1>
@@ -68,7 +70,9 @@
     <div class="card">
       <h2>Statements and Control Flow</h2>
       <ul>
-        <li>Variable declarations: <code>int x;</code>, <code>int x = 5;</code>, <code>string s;</code>, <code>string s = "hi";</code>, <code>int a[8];</code>, <code>struct Person p;</code></li>
+        <li>Variable declarations: <code>int x;</code>, <code>int x = 5;</code>, <code>string s;</code>,
+          <code>string s = "hi";</code>, <code>int a[8];</code>, <code>struct Person p;</code>
+        </li>
         <li>Scalar assignment and array element assignment</li>
         <li>Struct field assignment: <code>p.age = 7;</code>, <code>p.name = "neo";</code></li>
         <li><code>if</code> / <code>else</code></li>
@@ -81,9 +85,14 @@
     <div class="card">
       <h2>Expressions and Operators</h2>
       <ul>
-        <li>Integer arithmetic: <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>, <code>%</code>, unary <code>+</code>, unary <code>-</code></li>
-        <li>Increment/decrement: <code>++a</code>, <code>--a</code>, <code>a++</code>, <code>a--</code> (int locals)</li>
-        <li>Comparisons: <code>==</code>, <code>!=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code></li>
+        <li>Integer arithmetic: <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>, <code>%</code>, unary
+          <code>+</code>, unary <code>-</code>
+        </li>
+        <li>Increment/decrement: <code>++a</code>, <code>--a</code>, <code>a++</code>, <code>a--</code> (int locals)
+        </li>
+        <li>Comparisons: <code>==</code>, <code>!=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>,
+          <code>&gt;=</code>
+        </li>
         <li>Function call expressions</li>
         <li>Parenthesized expressions</li>
         <li>String literals</li>
@@ -94,12 +103,16 @@
 
     <div class="card" id="api-reference">
       <h2>API Reference</h2>
-      <p class="note">These are the built-ins exposed by PrismCC. Each one below includes what it does and how to call it.</p>
+      <p class="note">These are the built-ins exposed by PrismCC. Each one below includes what it does and how to call
+        it.</p>
 
       <div class="api-item">
         <h3 class="api-title"><code>print(expr)</code></h3>
-        <p class="api-meta">Prints a value and appends a newline. The argument can be <code>int</code> or <code>string</code>.</p>
-        <p>Use this when you want one call that handles either numeric or text output without choosing a separate function.</p>
+        <p class="api-meta">Prints a value and appends a newline. The argument can be <code>int</code> or
+          <code>string</code>.
+        </p>
+        <p>Use this when you want one call that handles either numeric or text output without choosing a separate
+          function.</p>
         <div class="api-example"><code>print("hello");
 print(42);</code></div>
       </div>
@@ -156,7 +169,9 @@ print_int(count);</code></div>
 
       <div class="api-item">
         <h3 class="api-title"><code>input_eq("literal")</code></h3>
-        <p class="api-meta">Compares the current input buffer against a literal string and returns <code>1</code> or <code>0</code>.</p>
+        <p class="api-meta">Compares the current input buffer against a literal string and returns <code>1</code> or
+          <code>0</code>.
+        </p>
         <p>Use this for menu choices, yes/no prompts, and simple command matching.</p>
         <div class="api-example"><code>if (input_eq("yes")) {
     print("confirmed");
@@ -172,7 +187,8 @@ print_int(count);</code></div>
 
       <div class="api-item">
         <h3 class="api-title"><code>string_eq(stringExprA, stringExprB)</code></h3>
-        <p class="api-meta">Compares two strings and returns <code>1</code> when they match, otherwise <code>0</code>.</p>
+        <p class="api-meta">Compares two strings and returns <code>1</code> when they match, otherwise <code>0</code>.
+        </p>
         <p>Use this when you need exact string matching without manual character-by-character code.</p>
         <div class="api-example"><code>if (string_eq(mode, "debug")) {
     print("debug mode");
@@ -211,7 +227,9 @@ print_int(count);</code></div>
 
       <div class="api-item">
         <h3 class="api-title"><code>set_fullscreen(int enabled)</code></h3>
-        <p class="api-meta">Enables or disables fullscreen app mode. In fullscreen mode, the VM listens for <code>Esc</code> as a global quit shortcut.</p>
+        <p class="api-meta">Enables or disables fullscreen app mode. In fullscreen mode, the VM listens for
+          <code>Esc</code> as a global quit shortcut.
+        </p>
         <p>Use this at app start to hide the text cursor and switch to framebuffer-style drawing updates.</p>
         <div class="api-example"><code>set_fullscreen(1);
 // ... draw loop ...
@@ -220,14 +238,18 @@ set_fullscreen(0);</code></div>
 
       <div class="api-item">
         <h3 class="api-title"><code>draw_pixel(int x, int y, int color)</code></h3>
-        <p class="api-meta">Draws one pixel at framebuffer coordinates <code>(x, y)</code> using palette color <code>0..15</code>.</p>
+        <p class="api-meta">Draws one pixel at framebuffer coordinates <code>(x, y)</code> using palette color
+          <code>0..15</code>.
+        </p>
         <p>Use this for custom software rendering, pixel art, and basic visual effects.</p>
         <div class="api-example"><code>draw_pixel(100, 80, 12);</code></div>
       </div>
 
       <div class="api-item">
         <h3 class="api-title"><code>app_should_quit()</code></h3>
-        <p class="api-meta">Returns <code>1</code> when a queued quit shortcut event is available, otherwise <code>0</code>.</p>
+        <p class="api-meta">Returns <code>1</code> when a queued quit shortcut event is available, otherwise
+          <code>0</code>.
+        </p>
         <p>Use this inside animation loops to exit cleanly without forcing the global shortcut behavior.</p>
         <div class="api-example"><code>while (app_should_quit() == 0) {
     // render frame
@@ -308,7 +330,8 @@ set_fullscreen(0);</code></div>
       <div class="api-item">
         <h3 class="api-title"><code>Small Standard Library (Headers)</code></h3>
         <p class="api-meta">Header-only helper library available under <code>/examples/std</code>.</p>
-        <p>Includes string helpers, math helpers, and IO wrappers that work with the new <code>#include</code> support.</p>
+        <p>Includes string helpers, math helpers, and IO wrappers that work with the new <code>#include</code> support.
+        </p>
         <div class="api-example"><code>#include "std/prism_string.h"
 #include "std/prism_math.h"
 #include "std/prism_io.h"</code></div>
@@ -342,6 +365,9 @@ set_fullscreen(0);</code></div>
     </div>
   </div>
 
-  <div class="footer">© 2026 PrismOS Project</div>
+  <footer>
+    <div class="footer">© 2026 PrismOS Project</div>
+  </footer>
 </body>
+
 </html>

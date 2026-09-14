@@ -17,6 +17,7 @@
 #define BCVM_HEAP_ARRAY_CELLS 1024U
 #define BCVM_FILE_PATH_MAX 128U
 #define BCVM_FILE_TEXT_MAX 2048U
+#define BCVM_FLOAT_SCALE 1000
 
 static char vm_input_buffer[BCVM_INPUT_MAX + 1U];
 static uint16_t vm_input_length = 0;
@@ -225,6 +226,39 @@ static void vm_write_int(int32_t value) {
     }
 
     console_write_uint((unsigned int)value);
+}
+
+static void vm_write_float(int32_t value) {
+    int32_t abs_value;
+    unsigned int integer_part;
+    unsigned int fraction_part;
+
+    if (value < 0) {
+        console_write_char('-');
+    }
+
+    if (value < 0) {
+        if ((uint32_t)value == 0x80000000U) {
+            abs_value = 2147483647;
+        } else {
+            abs_value = -value;
+        }
+    } else {
+        abs_value = value;
+    }
+
+    integer_part = (unsigned int)(abs_value / BCVM_FLOAT_SCALE);
+    fraction_part = (unsigned int)(abs_value % BCVM_FLOAT_SCALE);
+
+    console_write_uint(integer_part);
+    console_write_char('.');
+    if (fraction_part < 100U) {
+        console_write_char('0');
+    }
+    if (fraction_part < 10U) {
+        console_write_char('0');
+    }
+    console_write_uint(fraction_part);
 }
 
 static void vm_erase_last_echoed_char(void) {
@@ -524,6 +558,38 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
                 }
                 break;
             }
+            case BCVM_OP_FMUL:
+            case BCVM_OP_FDIV: {
+                int32_t rhs;
+                int32_t lhs;
+                int32_t result;
+
+                if (sp < 2U) {
+                    ERROR_LOG("BCVM float arithmetic underflow");
+                    return -1;
+                }
+
+                rhs = stack[--sp];
+                lhs = stack[--sp];
+
+                if (opcode == BCVM_OP_FDIV && rhs == 0) {
+                    ERROR_LOG("BCVM float divide by zero");
+                    return -1;
+                }
+
+                if (opcode == BCVM_OP_FMUL) {
+                    int32_t lhs_whole = lhs / BCVM_FLOAT_SCALE;
+                    int32_t lhs_fraction = lhs % BCVM_FLOAT_SCALE;
+                    result = lhs_whole * rhs + (lhs_fraction * rhs) / BCVM_FLOAT_SCALE;
+                } else {
+                    int32_t lhs_whole = lhs / rhs;
+                    int32_t lhs_fraction = lhs % rhs;
+                    result = lhs_whole * BCVM_FLOAT_SCALE + (lhs_fraction * BCVM_FLOAT_SCALE) / rhs;
+                }
+
+                stack[sp++] = (int32_t)result;
+                break;
+            }
             case BCVM_OP_NEG: {
                 if (sp == 0U) {
                     return -1;
@@ -689,6 +755,13 @@ int bytecode_vm_run(const uint8_t* image, uint32_t image_size, const char* args)
                 vm_write_int(stack[--sp]);
                 break;
             }
+            case BCVM_OP_PRINT_FLOAT:
+                if (sp == 0U) {
+                    return -1;
+                }
+
+                vm_write_float(stack[--sp]);
+                break;
             case BCVM_OP_PRINT_COLOR_STR: {
                 uint16_t offset;
                 uint16_t length;

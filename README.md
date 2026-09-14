@@ -98,3 +98,36 @@ app-run /HELLO.APP
 ```
 
 This uses the same subset language as `prismcc` and compiles directly on the PrismOS filesystem.
+
+## Built-in Banking App
+
+PrismOS now auto-installs a built-in banking app package at boot:
+
+- `/APPS/BANK.APP`
+
+Run it from the shell with:
+
+```text
+app-run /APPS/BANK.APP
+```
+
+The app stores accounts locally in:
+
+- `/DATA/BANK/ACCOUNTS.DB`
+
+Each account record contains username, password, and balance, and supports login, deposit, and withdrawal.
+
+## Program Data Folder
+
+PrismOS now creates a dedicated program-data folder during boot:
+
+- `/DATA`
+- `/DATA/APPS`
+
+Application code should store app data under `/DATA` instead of mixing data with app binaries under `/APPS`.
+
+For PrismCC apps, you can use the new stdlib header:
+
+- `#include "std/prism_data.h"`
+
+This header provides wrappers for filesystem operations oriented around app data paths.

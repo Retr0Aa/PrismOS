@@ -1,6 +1,7 @@
 #include "apps/app_runtime.h"
 
 #include "apps/app_format.h"
+#include "apps/bank_app.h"
 #include "apps/bytecode_vm.h"
 #include "apps/editor_app.h"
 #include "apps/ide_app.h"
@@ -55,6 +56,11 @@ int app_runtime_run(const uint8_t* image, uint32_t image_size, const char* args)
     if (string_equals(app_id, "IDE")) {
         DEBUG_LOG("app runtime dispatching IDE app");
         return ide_app_run(args);
+    }
+
+    if (string_equals(app_id, "BANK")) {
+        DEBUG_LOG("app runtime dispatching BANK app");
+        return bank_app_run(args);
     }
 
     ERROR_LOG("app runtime unknown app id");

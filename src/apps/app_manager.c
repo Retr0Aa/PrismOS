@@ -7,9 +7,22 @@
 #include "util/string.h"
 
 #define APPS_ROOT_PATH "/APPS"
+#define DATA_ROOT_PATH "/DATA"
+#define DATA_APPS_PATH "/DATA/APPS"
 #define APPS_EDITOR_PATH "/APPS/EDITOR.APP"
 #define APPS_IDE_PATH "/APPS/IDE.APP"
+#define APPS_BANK_PATH "/APPS/BANK.APP"
 static int app_manager_ready = 0;
+
+static int ensure_directory(const char* abs_path) {
+    int is_dir = 0;
+
+    if (vfs_path_is_dir(abs_path, &is_dir) == 0) {
+        return is_dir ? 0 : -1;
+    }
+
+    return vfs_mkdir(abs_path);
+}
 
 static void write_u16le(uint8_t* out, uint16_t value) {
     out[0] = (uint8_t)(value & 0xFFU);
@@ -83,20 +96,51 @@ static int ensure_ide_app_installed(void) {
     return 0;
 }
 
-int app_manager_init(void) {
-    int is_dir = 0;
+static int ensure_bank_app_installed(void) {
+    app_loader_image_t image;
+    uint8_t package[PRISM_APP_HEADER_SIZE + 4U];
 
-    if (vfs_path_is_dir(APPS_ROOT_PATH, &is_dir) == 0) {
-        if (!is_dir) {
-            app_manager_ready = 0;
-            return -1;
-        }
-    } else {
-        if (vfs_mkdir(APPS_ROOT_PATH) != 0) {
-            ERROR_LOG("failed to create /APPS directory");
-            app_manager_ready = 0;
-            return -1;
-        }
+    if (app_loader_load_image(APPS_BANK_PATH, &image) == 0) {
+        return 0;
+    }
+
+    write_u32le(&package[0], PRISM_APP_MAGIC);
+    write_u16le(&package[4], PRISM_APP_FORMAT_VERSION);
+    write_u16le(&package[6], 0U);
+    write_u32le(&package[8], 0U);
+    write_u32le(&package[12], 4U);
+    write_u32le(&package[16], 0U);
+    package[20] = 'B';
+    package[21] = 'A';
+    package[22] = 'N';
+    package[23] = 'K';
+
+    if (vfs_write_file(APPS_BANK_PATH, (const char*)package, sizeof(package), 0) != 0) {
+        ERROR_LOG("failed to install bank app package");
+        return -1;
+    }
+
+    DEBUG_LOG("bank app package installed");
+    return 0;
+}
+
+int app_manager_init(void) {
+    if (ensure_directory(DATA_ROOT_PATH) != 0) {
+        ERROR_LOG("failed to create /DATA directory");
+        app_manager_ready = 0;
+        return -1;
+    }
+
+    if (ensure_directory(DATA_APPS_PATH) != 0) {
+        ERROR_LOG("failed to create /DATA/APPS directory");
+        app_manager_ready = 0;
+        return -1;
+    }
+
+    if (ensure_directory(APPS_ROOT_PATH) != 0) {
+        ERROR_LOG("failed to create /APPS directory");
+        app_manager_ready = 0;
+        return -1;
     }
 
     if (ensure_editor_app_installed() != 0) {
@@ -105,6 +149,11 @@ int app_manager_init(void) {
     }
 
     if (ensure_ide_app_installed() != 0) {
+        app_manager_ready = 0;
+        return -1;
+    }
+
+    if (ensure_bank_app_installed() != 0) {
         app_manager_ready = 0;
         return -1;
     }
@@ -153,6 +202,8 @@ int app_manager_run_path(const char* app_abs_path, const char* args) {
                 repaired = ensure_editor_app_installed();
             } else if (strcmp(app_abs_path, APPS_IDE_PATH) == 0) {
                 repaired = ensure_ide_app_installed();
+            } else if (strcmp(app_abs_path, APPS_BANK_PATH) == 0) {
+                repaired = ensure_bank_app_installed();
             }
 
             if (repaired == 0 && app_loader_load_image(app_abs_path, &image) == 0) {

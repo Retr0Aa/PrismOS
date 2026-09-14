@@ -308,10 +308,18 @@ set_fullscreen(0);</code></div>
       <div class="api-item">
         <h3 class="api-title"><code>Small Standard Library (Headers)</code></h3>
         <p class="api-meta">Header-only helper library available under <code>/examples/std</code>.</p>
-        <p>Includes string helpers, math helpers, and IO wrappers that work with the new <code>#include</code> support.</p>
+        <p>Includes string helpers, math helpers, IO wrappers, and app-data helpers that work with the new <code>#include</code> support.</p>
         <div class="api-example"><code>#include "std/prism_string.h"
 #include "std/prism_math.h"
-#include "std/prism_io.h"</code></div>
+      #include "std/prism_io.h"
+      #include "std/prism_data.h"</code></div>
+            </div>
+
+            <div class="api-item">
+        <h3 class="api-title"><code>Program Data Folder</code></h3>
+        <p class="api-meta">Dedicated persistent app-data location.</p>
+        <p>Use <code>/DATA</code> (and optionally <code>/DATA/APPS</code>) for application data files instead of storing data next to app binaries.</p>
+        <div class="api-example"><code>file_write("/DATA/MYAPP.DAT", "value")</code></div>
       </div>
     </div>
 
@@ -330,7 +338,7 @@ set_fullscreen(0);</code></div>
       <ul>
         <li>No unions or enums</li>
         <li>No pointers</li>
-        <li>No floating-point types</li>
+        <li>No native IEEE-754 floating-point backend (current float support is fixed-point)</li>
         <li>No global variables</li>
         <li>No module or import system</li>
         <li>No separate object/link pipeline yet (includes are textual expansion)</li>

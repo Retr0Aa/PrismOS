@@ -65,6 +65,7 @@ $(BUILD)/bytecode_vm.o \
 $(BUILD)/prismcc_runtime.o \
 $(BUILD)/editor_app.o \
 $(BUILD)/ide_app.o \
+$(BUILD)/bank_app.o \
 $(BUILD)/app_manager.o
 
 # -------------------------

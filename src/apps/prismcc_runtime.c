@@ -16,10 +16,19 @@
 #define PRISMCC_MAX_STRUCT_FIELDS 16U
 #define PRISMCC_MAX_INCLUDE_DEPTH 8U
 #define PRISMCC_MAX_PATH 128U
+#define PRISMCC_FLOAT_SCALE 1000
 
 typedef enum {
     TOK_EOF = 0,
     TOK_INT,
+    TOK_INT8,
+    TOK_INT16,
+    TOK_INT32,
+    TOK_UINT8,
+    TOK_UINT16,
+    TOK_UINT32,
+    TOK_VOID,
+    TOK_FLOAT_TYPE,
     TOK_CHAR_TYPE,
     TOK_MAIN,
     TOK_RETURN,
@@ -50,6 +59,7 @@ typedef enum {
     TOK_STRING_TYPE,
     TOK_IDENTIFIER,
     TOK_NUMBER,
+    TOK_FLOAT_NUMBER,
     TOK_STRING,
     TOK_LPAREN,
     TOK_RPAREN,
@@ -96,13 +106,17 @@ typedef struct {
     uint16_t index;
     uint8_t type;
     uint8_t struct_index;
+    uint8_t array_value_type;
+    uint8_t array_struct_index;
 } Local;
 
 typedef enum {
     LOCAL_TYPE_INT = 0,
     LOCAL_TYPE_STRING = 1,
     LOCAL_TYPE_ARRAY = 2,
-    LOCAL_TYPE_STRUCT = 3
+    LOCAL_TYPE_STRUCT = 3,
+    LOCAL_TYPE_FLOAT = 4,
+    LOCAL_TYPE_VOID = 4
 } LocalType;
 
 typedef struct {
@@ -128,6 +142,7 @@ typedef struct {
     char callee[32];
     uint32_t code_immediate_offset;
     uint8_t arg_count;
+    uint8_t expects_value;
     uint8_t arg_types[PRISMCC_MAX_PARAMS];
 } CallPatch;
 
@@ -146,6 +161,7 @@ typedef struct {
     CallPatch call_patches[PRISMCC_MAX_CALL_PATCHES];
     uint32_t call_patch_count;
     uint32_t main_entry;
+    uint8_t current_function_return_type;
     const char* error;
 } PrismCompiler;
 
@@ -476,9 +492,87 @@ static int token_is_name(TokenType type) {
     return type == TOK_IDENTIFIER || type == TOK_MAIN;
 }
 
+static int token_is_integer_type(TokenType type) {
+    return type == TOK_INT
+        || type == TOK_INT8
+        || type == TOK_INT16
+        || type == TOK_INT32
+        || type == TOK_UINT8
+        || type == TOK_UINT16
+        || type == TOK_UINT32
+        || type == TOK_CHAR_TYPE;
+}
+
+static int token_is_decl_type(TokenType type) {
+    return token_is_integer_type(type)
+        || type == TOK_STRING_TYPE
+        || type == TOK_FLOAT_TYPE
+        || type == TOK_VOID;
+}
+
+static LocalType token_to_local_type(TokenType type) {
+    if (type == TOK_STRING_TYPE) {
+        return LOCAL_TYPE_STRING;
+    }
+
+    if (type == TOK_FLOAT_TYPE || type == TOK_FLOAT_NUMBER) {
+        return LOCAL_TYPE_FLOAT;
+    }
+
+    if (type == TOK_VOID) {
+        return LOCAL_TYPE_VOID;
+    }
+
+    return LOCAL_TYPE_INT;
+}
+
+static int types_compatible(uint8_t target_type, uint8_t source_type) {
+    if (target_type == source_type) {
+        return 1;
+    }
+
+    if (target_type == (uint8_t)LOCAL_TYPE_FLOAT && source_type == (uint8_t)LOCAL_TYPE_INT) {
+        return 1;
+    }
+
+    return 0;
+}
+
 static TokenType keyword_type(const char* text) {
     if (string_equals(text, "int")) {
         return TOK_INT;
+    }
+
+    if (string_equals(text, "int8")) {
+        return TOK_INT8;
+    }
+
+    if (string_equals(text, "int16")) {
+        return TOK_INT16;
+    }
+
+    if (string_equals(text, "int32")) {
+        return TOK_INT32;
+    }
+
+    if (string_equals(text, "uint8")) {
+        return TOK_UINT8;
+    }
+
+    if (string_equals(text, "uint16")) {
+        return TOK_UINT16;
+    }
+
+    if (string_equals(text, "uint32")) {
+        return TOK_UINT32;
+    }
+
+    if (string_equals(text, "float")) {
+        return TOK_FLOAT_TYPE;
+    }
+
+    if (string_equals(text, "void")) {
+        return TOK_VOID;
     }
 
     if (string_equals(text, "char")) {
@@ -658,13 +752,36 @@ static Token lexer_next(Lexer* lexer, const char** out_error) {
 
         if (is_digit(c)) {
             int32_t value = (int32_t)(c - '0');
+            int is_float = 0;
+            int32_t frac = 0;
+            int frac_digits = 0;
             while (lexer->position < lexer->length && is_digit(lexer->src[lexer->position])) {
                 value = value * 10 + (int32_t)(lexer->src[lexer->position] - '0');
                 lexer->position++;
             }
 
-            token.type = TOK_NUMBER;
-            token.number = value;
+            if (lexer->position + 1U < lexer->length
+                && lexer->src[lexer->position] == '.'
+                && is_digit(lexer->src[lexer->position + 1U])) {
+                is_float = 1;
+                lexer->position++;
+
+                while (lexer->position < lexer->length && is_digit(lexer->src[lexer->position])) {
+                    if (frac_digits < 3) {
+                        frac = frac * 10 + (int32_t)(lexer->src[lexer->position] - '0');
+                        frac_digits++;
+                    }
+                    lexer->position++;
+                }
+
+                while (frac_digits < 3) {
+                    frac *= 10;
+                    frac_digits++;
+                }
+            }
+
+            token.type = is_float ? TOK_FLOAT_NUMBER : TOK_NUMBER;
+            token.number = is_float ? (value * PRISMCC_FLOAT_SCALE + frac) : value;
             return token;
         }
 
@@ -984,6 +1101,8 @@ static int add_local(PrismCompiler* compiler, const char* name, LocalType type, 
     compiler->locals[compiler->local_count].index = (uint16_t)compiler->local_count;
     compiler->locals[compiler->local_count].type = (uint8_t)type;
     compiler->locals[compiler->local_count].struct_index = 0xFFU;
+    compiler->locals[compiler->local_count].array_value_type = (uint8_t)LOCAL_TYPE_INT;
+    compiler->locals[compiler->local_count].array_struct_index = 0xFFU;
     *out_index = (uint16_t)compiler->local_count;
     compiler->local_count++;
     return 0;
@@ -1052,7 +1171,8 @@ static int add_call_patch(PrismCompiler* compiler,
     const char* callee,
     uint32_t immediate_offset,
     uint8_t arg_count,
-    const uint8_t* arg_types) {
+    const uint8_t* arg_types,
+    int expects_value) {
     if (compiler->call_patch_count >= PRISMCC_MAX_CALL_PATCHES) {
         compiler->error = "too many call sites";
         return -1;
@@ -1063,6 +1183,7 @@ static int add_call_patch(PrismCompiler* compiler,
         sizeof(compiler->call_patches[compiler->call_patch_count].callee));
     compiler->call_patches[compiler->call_patch_count].code_immediate_offset = immediate_offset;
     compiler->call_patches[compiler->call_patch_count].arg_count = arg_count;
+    compiler->call_patches[compiler->call_patch_count].expects_value = expects_value ? 1U : 0U;
     for (uint32_t i = 0; i < arg_count; i++) {
         compiler->call_patches[compiler->call_patch_count].arg_types[i] = arg_types[i];
     }
@@ -1086,7 +1207,7 @@ static int emit_call_by_name(PrismCompiler* compiler, const char* name, uint8_t 
         return -1;
     }
 
-    return add_call_patch(compiler, name, patch_offset, arg_count, arg_types);
+    return add_call_patch(compiler, name, patch_offset, arg_count, arg_types, 0);
 }
 
 static int parse_expression(PrismCompiler* compiler);
@@ -1095,6 +1216,20 @@ static int parse_statement(PrismCompiler* compiler, int* saw_return);
 static uint8_t guess_expression_type(PrismCompiler* compiler) {
     TokenType type = compiler->lexer.current.type;
 
+    if (type == TOK_PLUS || type == TOK_MINUS) {
+        Lexer peek = compiler->lexer;
+        const char* lexer_error = 0;
+        Token next = lexer_next(&peek, &lexer_error);
+
+        if (lexer_error == 0 && next.type == TOK_FLOAT_NUMBER) {
+            return (uint8_t)LOCAL_TYPE_FLOAT;
+        }
+    }
+
+    if (type == TOK_FLOAT_NUMBER) {
+        return (uint8_t)LOCAL_TYPE_FLOAT;
+    }
+
     if (type == TOK_STRING || type == TOK_READ_TEXT || type == TOK_FILE_READ) {
         return (uint8_t)LOCAL_TYPE_STRING;
     }
@@ -1102,11 +1237,17 @@ static uint8_t guess_expression_type(PrismCompiler* compiler) {
     if (token_is_name(type)) {
         Local* local = find_local_entry(compiler, compiler->lexer.current.text);
         if (local != 0) {
-            if (local->type == (uint8_t)LOCAL_TYPE_STRUCT) {
-                Lexer peek = compiler->lexer;
-                const char* lexer_error = 0;
-                Token after_name = lexer_next(&peek, &lexer_error);
+            Lexer peek = compiler->lexer;
+            const char* lexer_error = 0;
+            Token after_name = lexer_next(&peek, &lexer_error);
 
+            if (lexer_error == 0
+                && local->type == (uint8_t)LOCAL_TYPE_ARRAY
+                && after_name.type == TOK_LBRACKET) {
+                return local->array_value_type;
+            }
+
+            if (local->type == (uint8_t)LOCAL_TYPE_STRUCT) {
                 if (lexer_error == 0 && after_name.type == TOK_DOT) {
                     Token field = lexer_next(&peek, &lexer_error);
 
@@ -1136,6 +1277,7 @@ static int parse_declaration(PrismCompiler* compiler,
     char name[PRISMCC_MAX_TOKEN_TEXT];
     uint16_t local_index;
     LocalType effective_type = type;
+    uint8_t array_value_type = (uint8_t)type;
     uint16_t array_length = 0;
     Local* existing_local = 0;
 
@@ -1174,7 +1316,8 @@ static int parse_declaration(PrismCompiler* compiler,
     }
 
     if (existing_local != 0) {
-        if (existing_local->type != (uint8_t)effective_type) {
+        if (existing_local->type != (uint8_t)effective_type
+            || (effective_type == LOCAL_TYPE_ARRAY && existing_local->array_value_type != array_value_type)) {
             compiler->error = "conflicting local type for reused for variable";
             return -1;
         }
@@ -1183,6 +1326,11 @@ static int parse_declaration(PrismCompiler* compiler,
     } else {
         if (add_local(compiler, name, effective_type, &local_index) != 0) {
             return -1;
+        }
+
+        if (effective_type == LOCAL_TYPE_ARRAY) {
+            compiler->locals[local_index].array_value_type = array_value_type;
+            compiler->locals[local_index].array_struct_index = 0xFFU;
         }
     }
 
@@ -1196,9 +1344,25 @@ static int parse_declaration(PrismCompiler* compiler,
             return -1;
         }
     } else if (compiler->lexer.current.type == TOK_ASSIGN) {
+        uint8_t rhs_type;
+
         next_token(compiler);
+        rhs_type = guess_expression_type(compiler);
         if (parse_expression(compiler) != 0) {
             return -1;
+        }
+
+        if (!types_compatible((uint8_t)effective_type, rhs_type)) {
+            compiler->error = "initializer type mismatch";
+            return -1;
+        }
+
+        if ((uint8_t)effective_type == (uint8_t)LOCAL_TYPE_FLOAT && rhs_type == (uint8_t)LOCAL_TYPE_INT) {
+            if (emit_u8(compiler, BCVM_OP_PUSH_I32) != 0
+                || emit_u32(compiler, PRISMCC_FLOAT_SCALE) != 0
+                || emit_u8(compiler, BCVM_OP_MUL) != 0) {
+                return -1;
+            }
         }
     } else {
         if (emit_u8(compiler, BCVM_OP_PUSH_I32) != 0 || emit_u32(compiler, 0U) != 0) {
@@ -1229,6 +1393,34 @@ static int parse_string_declaration(PrismCompiler* compiler, int expect_semicolo
     return parse_declaration(compiler, LOCAL_TYPE_STRING, TOK_STRING_TYPE, "expected identifier after string", expect_semicolon, 0);
 }
 
+static int parse_float_declaration(PrismCompiler* compiler, int expect_semicolon) {
+    return parse_declaration(compiler, LOCAL_TYPE_FLOAT, TOK_FLOAT_TYPE, "expected identifier after float", expect_semicolon, 0);
+}
+
+static int parse_int8_declaration(PrismCompiler* compiler, int expect_semicolon) {
+    return parse_declaration(compiler, LOCAL_TYPE_INT, TOK_INT8, "expected identifier after int8", expect_semicolon, 0);
+}
+
+static int parse_int16_declaration(PrismCompiler* compiler, int expect_semicolon) {
+    return parse_declaration(compiler, LOCAL_TYPE_INT, TOK_INT16, "expected identifier after int16", expect_semicolon, 0);
+}
+
+static int parse_int32_declaration(PrismCompiler* compiler, int expect_semicolon) {
+    return parse_declaration(compiler, LOCAL_TYPE_INT, TOK_INT32, "expected identifier after int32", expect_semicolon, 0);
+}
+
+static int parse_uint8_declaration(PrismCompiler* compiler, int expect_semicolon) {
+    return parse_declaration(compiler, LOCAL_TYPE_INT, TOK_UINT8, "expected identifier after uint8", expect_semicolon, 0);
+}
+
+static int parse_uint16_declaration(PrismCompiler* compiler, int expect_semicolon) {
+    return parse_declaration(compiler, LOCAL_TYPE_INT, TOK_UINT16, "expected identifier after uint16", expect_semicolon, 0);
+}
+
+static int parse_uint32_declaration(PrismCompiler* compiler, int expect_semicolon) {
+    return parse_declaration(compiler, LOCAL_TYPE_INT, TOK_UINT32, "expected identifier after uint32", expect_semicolon, 0);
+}
+
 static int parse_for_int_declaration(PrismCompiler* compiler) {
     return parse_declaration(compiler, LOCAL_TYPE_INT, TOK_INT, "expected identifier after int", 0, 1);
 }
@@ -1241,11 +1433,41 @@ static int parse_for_string_declaration(PrismCompiler* compiler) {
     return parse_declaration(compiler, LOCAL_TYPE_STRING, TOK_STRING_TYPE, "expected identifier after string", 0, 1);
 }
 
+static int parse_for_float_declaration(PrismCompiler* compiler) {
+    return parse_declaration(compiler, LOCAL_TYPE_FLOAT, TOK_FLOAT_TYPE, "expected identifier after float", 0, 1);
+}
+
+static int parse_for_int8_declaration(PrismCompiler* compiler) {
+    return parse_declaration(compiler, LOCAL_TYPE_INT, TOK_INT8, "expected identifier after int8", 0, 1);
+}
+
+static int parse_for_int16_declaration(PrismCompiler* compiler) {
+    return parse_declaration(compiler, LOCAL_TYPE_INT, TOK_INT16, "expected identifier after int16", 0, 1);
+}
+
+static int parse_for_int32_declaration(PrismCompiler* compiler) {
+    return parse_declaration(compiler, LOCAL_TYPE_INT, TOK_INT32, "expected identifier after int32", 0, 1);
+}
+
+static int parse_for_uint8_declaration(PrismCompiler* compiler) {
+    return parse_declaration(compiler, LOCAL_TYPE_INT, TOK_UINT8, "expected identifier after uint8", 0, 1);
+}
+
+static int parse_for_uint16_declaration(PrismCompiler* compiler) {
+    return parse_declaration(compiler, LOCAL_TYPE_INT, TOK_UINT16, "expected identifier after uint16", 0, 1);
+}
+
+static int parse_for_uint32_declaration(PrismCompiler* compiler) {
+    return parse_declaration(compiler, LOCAL_TYPE_INT, TOK_UINT32, "expected identifier after uint32", 0, 1);
+}
+
 static int parse_struct_variable_declaration(PrismCompiler* compiler, int expect_semicolon) {
     char struct_name[PRISMCC_MAX_TOKEN_TEXT];
     char variable_name[PRISMCC_MAX_TOKEN_TEXT];
     StructDef* def;
     uint16_t local_index;
+    uint16_t array_length = 0;
+    int is_array = 0;
 
     if (expect(compiler, TOK_STRUCT, "expected 'struct'") != 0) {
         return -1;
@@ -1273,18 +1495,38 @@ static int parse_struct_variable_declaration(PrismCompiler* compiler, int expect
     copy_string(variable_name, compiler->lexer.current.text, sizeof(variable_name));
     next_token(compiler);
 
-    if (add_local(compiler, variable_name, LOCAL_TYPE_STRUCT, &local_index) != 0) {
+    if (compiler->lexer.current.type == TOK_LBRACKET) {
+        next_token(compiler);
+
+        if (compiler->lexer.current.type != TOK_NUMBER || compiler->lexer.current.number <= 0) {
+            compiler->error = "array size must be a positive constant";
+            return -1;
+        }
+
+        array_length = (uint16_t)compiler->lexer.current.number;
+        next_token(compiler);
+
+        if (expect(compiler, TOK_RBRACKET, "expected ']' after array size") != 0) {
+            return -1;
+        }
+
+        is_array = 1;
+    }
+
+    if (add_local(compiler, variable_name, is_array ? LOCAL_TYPE_ARRAY : LOCAL_TYPE_STRUCT, &local_index) != 0) {
         return -1;
     }
 
     compiler->locals[local_index].struct_index = (uint8_t)(def - compiler->structs);
+    compiler->locals[local_index].array_value_type = is_array ? (uint8_t)LOCAL_TYPE_STRUCT : (uint8_t)LOCAL_TYPE_INT;
+    compiler->locals[local_index].array_struct_index = is_array ? (uint8_t)(def - compiler->structs) : 0xFFU;
 
     if (compiler->lexer.current.type == TOK_ASSIGN) {
         compiler->error = "struct initializer is not supported yet";
         return -1;
     }
 
-    if (emit_u8(compiler, BCVM_OP_ARR_NEW) != 0 || emit_u16(compiler, def->field_count) != 0) {
+    if (emit_u8(compiler, BCVM_OP_ARR_NEW) != 0 || emit_u16(compiler, is_array ? array_length : def->field_count) != 0) {
         return -1;
     }
 
@@ -1327,12 +1569,14 @@ static int parse_struct_definition(PrismCompiler* compiler) {
         TokenType field_type_token = compiler->lexer.current.type;
         LocalType field_type;
 
-        if (field_type_token != TOK_INT && field_type_token != TOK_CHAR_TYPE && field_type_token != TOK_STRING_TYPE) {
-            compiler->error = "struct fields must be int, char or string";
+        if (!token_is_integer_type(field_type_token)
+            && field_type_token != TOK_STRING_TYPE
+            && field_type_token != TOK_FLOAT_TYPE) {
+            compiler->error = "struct fields must be integer, char, string or float";
             return -1;
         }
 
-        field_type = field_type_token == TOK_STRING_TYPE ? LOCAL_TYPE_STRING : LOCAL_TYPE_INT;
+        field_type = token_to_local_type(field_type_token);
 
         next_token(compiler);
 
@@ -1409,6 +1653,8 @@ static int parse_call_after_name(PrismCompiler* compiler, const char* name, int 
         return -1;
     }
 
+    compiler->call_patches[compiler->call_patch_count - 1U].expects_value = discard_return ? 0U : 1U;
+
     if (discard_return) {
         return emit_u8(compiler, BCVM_OP_POP);
     }
@@ -1419,6 +1665,7 @@ static int parse_call_after_name(PrismCompiler* compiler, const char* name, int 
 static int parse_assignment_after_name(PrismCompiler* compiler, const char* name) {
     Local* local = find_local_entry(compiler, name);
     uint16_t local_index;
+    uint8_t rhs_type;
 
     if (local == 0) {
         compiler->error = "assignment to unknown identifier";
@@ -1436,8 +1683,22 @@ static int parse_assignment_after_name(PrismCompiler* compiler, const char* name
         return -1;
     }
 
+    rhs_type = guess_expression_type(compiler);
     if (parse_expression(compiler) != 0) {
         return -1;
+    }
+
+    if (!types_compatible(local->type, rhs_type)) {
+        compiler->error = "assignment type mismatch";
+        return -1;
+    }
+
+    if (local->type == (uint8_t)LOCAL_TYPE_FLOAT && rhs_type == (uint8_t)LOCAL_TYPE_INT) {
+        if (emit_u8(compiler, BCVM_OP_PUSH_I32) != 0
+            || emit_u32(compiler, PRISMCC_FLOAT_SCALE) != 0
+            || emit_u8(compiler, BCVM_OP_MUL) != 0) {
+            return -1;
+        }
     }
 
     if (emit_u8(compiler, BCVM_OP_STORE_LOCAL) != 0 || emit_u16(compiler, local_index) != 0) {
@@ -1513,6 +1774,7 @@ static int parse_prefix_update(PrismCompiler* compiler, int delta) {
 
 static int parse_array_store_after_name(PrismCompiler* compiler, const char* name) {
     Local* local = find_local_entry(compiler, name);
+    uint8_t rhs_type;
 
     if (local == 0) {
         compiler->error = "assignment to unknown identifier";
@@ -1544,8 +1806,22 @@ static int parse_array_store_after_name(PrismCompiler* compiler, const char* nam
         return -1;
     }
 
+    rhs_type = guess_expression_type(compiler);
     if (parse_expression(compiler) != 0) {
         return -1;
+    }
+
+    if (!types_compatible(local->array_value_type, rhs_type)) {
+        compiler->error = "array element type mismatch";
+        return -1;
+    }
+
+    if (local->array_value_type == (uint8_t)LOCAL_TYPE_FLOAT && rhs_type == (uint8_t)LOCAL_TYPE_INT) {
+        if (emit_u8(compiler, BCVM_OP_PUSH_I32) != 0
+            || emit_u32(compiler, PRISMCC_FLOAT_SCALE) != 0
+            || emit_u8(compiler, BCVM_OP_MUL) != 0) {
+            return -1;
+        }
     }
 
     return emit_u8(compiler, BCVM_OP_ARR_SET);
@@ -1636,6 +1912,62 @@ static int parse_for_clause_item(PrismCompiler* compiler, int allow_declaration)
         }
 
         return parse_struct_variable_declaration(compiler, 0);
+    }
+
+    if (compiler->lexer.current.type == TOK_FLOAT_TYPE) {
+        if (!allow_declaration) {
+            compiler->error = "for increment does not support declaration";
+            return -1;
+        }
+        return parse_for_float_declaration(compiler);
+    }
+
+    if (compiler->lexer.current.type == TOK_INT8) {
+        if (!allow_declaration) {
+            compiler->error = "for increment does not support declaration";
+            return -1;
+        }
+        return parse_for_int8_declaration(compiler);
+    }
+
+    if (compiler->lexer.current.type == TOK_INT16) {
+        if (!allow_declaration) {
+            compiler->error = "for increment does not support declaration";
+            return -1;
+        }
+        return parse_for_int16_declaration(compiler);
+    }
+
+    if (compiler->lexer.current.type == TOK_INT32) {
+        if (!allow_declaration) {
+            compiler->error = "for increment does not support declaration";
+            return -1;
+        }
+        return parse_for_int32_declaration(compiler);
+    }
+
+    if (compiler->lexer.current.type == TOK_UINT8) {
+        if (!allow_declaration) {
+            compiler->error = "for increment does not support declaration";
+            return -1;
+        }
+        return parse_for_uint8_declaration(compiler);
+    }
+
+    if (compiler->lexer.current.type == TOK_UINT16) {
+        if (!allow_declaration) {
+            compiler->error = "for increment does not support declaration";
+            return -1;
+        }
+        return parse_for_uint16_declaration(compiler);
+    }
+
+    if (compiler->lexer.current.type == TOK_UINT32) {
+        if (!allow_declaration) {
+            compiler->error = "for increment does not support declaration";
+            return -1;
+        }
+        return parse_for_uint32_declaration(compiler);
     }
 
     if (token_is_name(compiler->lexer.current.type)) {
@@ -1899,6 +2231,15 @@ static int parse_primary(PrismCompiler* compiler) {
         return compiler->error == 0 ? 0 : -1;
     }
 
+    if (token.type == TOK_FLOAT_NUMBER) {
+        if (emit_u8(compiler, BCVM_OP_PUSH_I32) != 0 || emit_u32(compiler, (uint32_t)token.number) != 0) {
+            return -1;
+        }
+
+        next_token(compiler);
+        return compiler->error == 0 ? 0 : -1;
+    }
+
     if (token.type == TOK_STRING) {
         uint16_t offset;
         uint16_t length = (uint16_t)string_length(token.text);
@@ -2054,6 +2395,8 @@ static int parse_unary(PrismCompiler* compiler) {
 }
 
 static int parse_term(PrismCompiler* compiler) {
+    uint8_t lhs_type = guess_expression_type(compiler);
+
     if (parse_unary(compiler) != 0) {
         return -1;
     }
@@ -2062,24 +2405,47 @@ static int parse_term(PrismCompiler* compiler) {
         || compiler->lexer.current.type == TOK_SLASH
         || compiler->lexer.current.type == TOK_PERCENT) {
         TokenType op = compiler->lexer.current.type;
+        uint8_t rhs_type;
         next_token(compiler);
+
+        rhs_type = guess_expression_type(compiler);
 
         if (parse_unary(compiler) != 0) {
             return -1;
         }
 
-        if (op == TOK_STAR) {
-            if (emit_u8(compiler, BCVM_OP_MUL) != 0) {
+        if (lhs_type == (uint8_t)LOCAL_TYPE_FLOAT || rhs_type == (uint8_t)LOCAL_TYPE_FLOAT) {
+            if (op == TOK_PERCENT) {
+                compiler->error = "float modulo is not supported";
                 return -1;
             }
-        } else if (op == TOK_SLASH) {
-            if (emit_u8(compiler, BCVM_OP_DIV) != 0) {
+
+            if (lhs_type != (uint8_t)LOCAL_TYPE_FLOAT || rhs_type != (uint8_t)LOCAL_TYPE_FLOAT) {
+                compiler->error = "mixed int/float arithmetic is not supported";
                 return -1;
             }
+
+            if (emit_u8(compiler, op == TOK_STAR ? BCVM_OP_FMUL : BCVM_OP_FDIV) != 0) {
+                return -1;
+            }
+
+            lhs_type = (uint8_t)LOCAL_TYPE_FLOAT;
         } else {
-            if (emit_u8(compiler, BCVM_OP_MOD) != 0) {
-                return -1;
+            if (op == TOK_STAR) {
+                if (emit_u8(compiler, BCVM_OP_MUL) != 0) {
+                    return -1;
+                }
+            } else if (op == TOK_SLASH) {
+                if (emit_u8(compiler, BCVM_OP_DIV) != 0) {
+                    return -1;
+                }
+            } else {
+                if (emit_u8(compiler, BCVM_OP_MOD) != 0) {
+                    return -1;
+                }
             }
+
+            lhs_type = (uint8_t)LOCAL_TYPE_INT;
         }
 
         if (compiler->error != 0) {
@@ -2091,21 +2457,36 @@ static int parse_term(PrismCompiler* compiler) {
 }
 
 static int parse_additive(PrismCompiler* compiler) {
+    uint8_t lhs_type = guess_expression_type(compiler);
+
     if (parse_term(compiler) != 0) {
         return -1;
     }
 
     while (compiler->lexer.current.type == TOK_PLUS || compiler->lexer.current.type == TOK_MINUS) {
         TokenType op = compiler->lexer.current.type;
+        uint8_t rhs_type;
         next_token(compiler);
 
+        rhs_type = guess_expression_type(compiler);
+
         if (parse_term(compiler) != 0) {
+            return -1;
+        }
+
+        if ((lhs_type == (uint8_t)LOCAL_TYPE_FLOAT || rhs_type == (uint8_t)LOCAL_TYPE_FLOAT)
+            && (lhs_type != (uint8_t)LOCAL_TYPE_FLOAT || rhs_type != (uint8_t)LOCAL_TYPE_FLOAT)) {
+            compiler->error = "mixed int/float arithmetic is not supported";
             return -1;
         }
 
         if (emit_u8(compiler, op == TOK_PLUS ? BCVM_OP_ADD : BCVM_OP_SUB) != 0) {
             return -1;
         }
+
+        lhs_type = (lhs_type == (uint8_t)LOCAL_TYPE_FLOAT || rhs_type == (uint8_t)LOCAL_TYPE_FLOAT)
+            ? (uint8_t)LOCAL_TYPE_FLOAT
+            : (uint8_t)LOCAL_TYPE_INT;
     }
 
     return compiler->error == 0 ? 0 : -1;
@@ -2351,8 +2732,36 @@ static int parse_statement(PrismCompiler* compiler, int* saw_return) {
         return parse_int_declaration(compiler, 1);
     }
 
+    if (compiler->lexer.current.type == TOK_INT8) {
+        return parse_int8_declaration(compiler, 1);
+    }
+
+    if (compiler->lexer.current.type == TOK_INT16) {
+        return parse_int16_declaration(compiler, 1);
+    }
+
+    if (compiler->lexer.current.type == TOK_INT32) {
+        return parse_int32_declaration(compiler, 1);
+    }
+
+    if (compiler->lexer.current.type == TOK_UINT8) {
+        return parse_uint8_declaration(compiler, 1);
+    }
+
+    if (compiler->lexer.current.type == TOK_UINT16) {
+        return parse_uint16_declaration(compiler, 1);
+    }
+
+    if (compiler->lexer.current.type == TOK_UINT32) {
+        return parse_uint32_declaration(compiler, 1);
+    }
+
     if (compiler->lexer.current.type == TOK_CHAR_TYPE) {
         return parse_char_declaration(compiler, 1);
+    }
+
+    if (compiler->lexer.current.type == TOK_FLOAT_TYPE) {
+        return parse_float_declaration(compiler, 1);
     }
 
     if (compiler->lexer.current.type == TOK_STRING_TYPE) {
@@ -2387,6 +2796,10 @@ static int parse_statement(PrismCompiler* compiler, int* saw_return) {
 
         if (print_arg_type == (uint8_t)LOCAL_TYPE_STRING) {
             if (emit_u8(compiler, BCVM_OP_PRINT_STR_VAL) != 0) {
+                return -1;
+            }
+        } else if (print_arg_type == (uint8_t)LOCAL_TYPE_FLOAT) {
+            if (emit_u8(compiler, BCVM_OP_PRINT_FLOAT) != 0) {
                 return -1;
             }
         } else {
@@ -2712,10 +3125,54 @@ static int parse_statement(PrismCompiler* compiler, int* saw_return) {
     }
 
     if (compiler->lexer.current.type == TOK_RETURN) {
+        uint8_t return_expr_type;
+
         next_token(compiler);
 
+        if (compiler->current_function_return_type == (uint8_t)LOCAL_TYPE_VOID) {
+            if (compiler->lexer.current.type != TOK_SEMI) {
+                compiler->error = "void function cannot return a value";
+                return -1;
+            }
+
+            if (expect(compiler, TOK_SEMI, "expected ';' after return") != 0) {
+                return -1;
+            }
+
+            if (emit_u8(compiler, BCVM_OP_PUSH_I32) != 0 || emit_u32(compiler, 0U) != 0) {
+                return -1;
+            }
+
+            if (emit_u8(compiler, BCVM_OP_RET) != 0) {
+                return -1;
+            }
+
+            *saw_return = 1;
+            return 0;
+        }
+
+        if (compiler->lexer.current.type == TOK_SEMI) {
+            compiler->error = "non-void function must return a value";
+            return -1;
+        }
+
+        return_expr_type = guess_expression_type(compiler);
         if (parse_expression(compiler) != 0) {
             return -1;
+        }
+
+        if (!types_compatible(compiler->current_function_return_type, return_expr_type)) {
+            compiler->error = "return type mismatch";
+            return -1;
+        }
+
+        if (compiler->current_function_return_type == (uint8_t)LOCAL_TYPE_FLOAT
+            && return_expr_type == (uint8_t)LOCAL_TYPE_INT) {
+            if (emit_u8(compiler, BCVM_OP_PUSH_I32) != 0
+                || emit_u32(compiler, PRISMCC_FLOAT_SCALE) != 0
+                || emit_u8(compiler, BCVM_OP_MUL) != 0) {
+                return -1;
+            }
         }
 
         if (expect(compiler, TOK_SEMI, "expected ';' after return") != 0) {
@@ -2817,12 +3274,14 @@ static int parse_function(PrismCompiler* compiler) {
     uint8_t param_count = 0;
     int saw_return = 0;
     TokenType return_type = compiler->lexer.current.type;
-    LocalType return_local_type = return_type == TOK_STRING_TYPE ? LOCAL_TYPE_STRING : LOCAL_TYPE_INT;
+    LocalType return_local_type = LOCAL_TYPE_INT;
 
-    if (return_type != TOK_INT && return_type != TOK_CHAR_TYPE && return_type != TOK_STRING_TYPE) {
-        compiler->error = "expected int, char or string at function start";
+    if (!token_is_decl_type(return_type)) {
+        compiler->error = "expected valid return type at function start";
         return -1;
     }
+
+    return_local_type = token_to_local_type(return_type);
 
     if (expect(compiler, return_type, "expected function return type") != 0) {
         return -1;
@@ -2841,6 +3300,7 @@ static int parse_function(PrismCompiler* compiler) {
     }
 
     compiler->local_count = 0;
+    compiler->current_function_return_type = (uint8_t)return_local_type;
 
     if (compiler->lexer.current.type != TOK_RPAREN) {
         while (1) {
@@ -2849,8 +3309,9 @@ static int parse_function(PrismCompiler* compiler) {
             LocalType param_type;
             TokenType param_token = compiler->lexer.current.type;
 
-            if (param_token != TOK_INT && param_token != TOK_CHAR_TYPE && param_token != TOK_STRING_TYPE) {
-                compiler->error = "expected int, char or string parameter type";
+            if (!token_is_decl_type(param_token)
+                || param_token == TOK_VOID) {
+                compiler->error = "expected numeric, char, string or float parameter type";
                 return -1;
             }
 
@@ -2858,7 +3319,7 @@ static int parse_function(PrismCompiler* compiler) {
                 return -1;
             }
 
-            param_type = (param_token == TOK_STRING_TYPE) ? LOCAL_TYPE_STRING : LOCAL_TYPE_INT;
+            param_type = token_to_local_type(param_token);
 
             if (!token_is_name(compiler->lexer.current.type)) {
                 compiler->error = "expected parameter name";
@@ -2921,6 +3382,13 @@ static int resolve_call_patches(PrismCompiler* compiler) {
         }
 
         function_uindex = (uint32_t)function_index;
+
+        if (compiler->call_patches[i].expects_value != 0U
+            && compiler->functions[function_uindex].return_type == (uint8_t)LOCAL_TYPE_VOID) {
+            compiler->error = "void function call cannot be used as a value";
+            return -1;
+        }
+
         patch_u32_at(compiler,
             compiler->call_patches[i].code_immediate_offset,
             compiler->functions[function_uindex].entry_offset);
@@ -2943,10 +3411,8 @@ static int parse_program(PrismCompiler* compiler) {
             continue;
         }
 
-        if (compiler->lexer.current.type != TOK_INT
-            && compiler->lexer.current.type != TOK_CHAR_TYPE
-            && compiler->lexer.current.type != TOK_STRING_TYPE) {
-            compiler->error = "top-level items must be int, char or string methods";
+        if (!token_is_decl_type(compiler->lexer.current.type)) {
+            compiler->error = "top-level items must use supported method return types";
             return -1;
         }
 

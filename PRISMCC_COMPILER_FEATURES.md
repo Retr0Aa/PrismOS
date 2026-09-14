@@ -14,13 +14,18 @@ PrismCC compiles a C-like subset into BCVM bytecode packaged in the Prism app fo
 ## Language: Supported Types
 
 - `int`
+- `int8`, `int16`, `int32`
+- `uint8`, `uint16`, `uint32`
 - `char` (int-backed single-character value)
 - `string`
+- `float` (fixed-point with 3 decimal places)
+- `void` (function return type)
 - `int[N]` fixed-size arrays
-- `struct` types with `int`/`string` fields
+- `struct` types with integer/string/float fields
 
 Notes:
-- Arrays are currently int-only.
+- Integer aliases currently map to VM 32-bit integer behavior.
+- Floats use fixed-point scaling (`1000`).
 - String values are first-class VM values (descriptors).
 - Local variable limit per function: 64.
 
@@ -28,8 +33,9 @@ Notes:
 
 - User-defined functions are supported.
 - Function parameters are supported (`int` and `string`).
-- Function parameters are supported (`int`, `char` and `string`).
+- Function parameters are supported (`int`/integer aliases, `char`, `string`, `float`).
 - Return values are supported.
+- `void` methods are supported (`void name(...) { ... }`).
 - Method overloading is supported by signature:
   - same name
   - different parameter type list
@@ -49,12 +55,18 @@ Notes:
 
 - Variable declarations:
   - `int x;`
+  - `int16 x;`
+  - `uint32 x;`
   - `int x = 5;`
+  - `float f = 1.250;`
   - `char c;`
   - `char c = 'A';`
   - `string s;`
   - `string s = "hi";`
   - `int a[8];`
+  - `float samples[8];`
+  - `string lines[8];`
+  - `struct Person people[4];`
   - `struct Person p;`
 - Assignment:
   - scalar assignment (`x = expr;`)
@@ -63,7 +75,8 @@ Notes:
 - `if` / `else`
 - `while`
 - `for (init; condition; increment)`
-- `return expr;`
+- `return expr;` for non-void methods
+- `return;` for void methods
 
 ## Language: Expressions and Operators
 
@@ -71,6 +84,11 @@ Notes:
   - `+`, `-`, `*`, `/`, `%`
   - unary `+`, unary `-`
   - `++a`, `--a`, `a++`, `a--` for `int` locals
+- Float arithmetic:
+  - `+`, `-`, `*`, `/`
+  - `*` and `/` use fixed-point VM opcodes
+  - `%` is not supported for float
+  - mixing int and float in a single arithmetic operation is not supported implicitly
 - Integer comparisons:
   - `==`, `!=`, `<`, `<=`, `>`, `>=`
 - Function call expressions
@@ -124,9 +142,12 @@ Notes:
 
 Path strings are passed directly to VFS operations in the VM.
 
+Program data convention:
+- Store app data files under `/DATA` (or `/DATA/APPS` for grouped app data).
+
 ## Arrays
 
-- Fixed-size declaration with constant positive size (`int a[16];`)
+- Fixed-size declaration with constant positive size (`int a[16];`, `float a[16];`, `string a[16];`, `struct T a[16];`)
 - Zero-initialized when created
 - Indexed read/write:
   - `x = a[i];`
@@ -173,18 +194,21 @@ The repository now includes a small header-only standard library under `/example
   - arithmetic wrappers, `std_abs`, `std_min`, `std_max`, `std_clamp`, `std_pow2`
 - `/examples/std/prism_io.h`
   - print/read helpers and filesystem wrappers
+- `/examples/std/prism_data.h`
+  - app-data oriented wrappers and `/DATA` path helpers
 
 Usage example:
 
 - `#include "std/prism_string.h"`
 - `#include "std/prism_math.h"`
 - `#include "std/prism_io.h"`
+- `#include "std/prism_data.h"`
 
 ## Current Known Gaps
 
 - No unions/enums
 - No pointers
-- No floating-point types
+- No native IEEE-754 floating-point backend (current float support is fixed-point)
 - No global variables
 - No module/import system
 - No separate object/link pipeline yet (includes are textual expansion)

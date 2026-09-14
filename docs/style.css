@@ -9,6 +9,10 @@ body {
   color: #ffffff;
 }
 
+a:any-link {
+  color: white;
+}
+
 header {
   padding: 40px;
   text-align: center;
@@ -35,7 +39,7 @@ nav {
   border-bottom: 1px solid #24324f;
 }
 
-nav a {
+nav a, .btn {
   color: #ffffff;
   text-decoration: none;
   padding: 8px 14px;
@@ -43,8 +47,9 @@ nav a {
   border: 1px solid #334155;
 }
 
-nav a:hover {
+nav a:hover, .btn:hover {
   background: #273244;
+  cursor: pointer;
 }
 
 .container {
@@ -77,6 +82,11 @@ nav a:hover {
   background: #0f172a;
   padding: 2px 6px;
   border: 1px solid #334155;
+}
+
+.card-warning {
+  background: #3b3b1e;
+  border-color: #555233;
 }
 
 .api-item {
